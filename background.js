@@ -422,9 +422,71 @@ async function getFileCount(bucketId) {
   });
 }
 
+// 清空历史数据（插件启动时调用）
+async function clearHistoryData() {
+  try {
+    await ensureDatabase();
+
+    if (!db) {
+      console.log('[Bucket Viewer] Database not initialized, skipping history cleanup');
+      return;
+    }
+
+    console.log('[Bucket Viewer] Clearing history data on startup...');
+
+    // 清空buckets表
+    const bucketTransaction = db.transaction(['buckets'], 'readwrite');
+    const bucketStore = bucketTransaction.objectStore('buckets');
+    const clearBucketRequest = bucketStore.clear();
+
+    clearBucketRequest.onsuccess = () => {
+      console.log('[Bucket Viewer] Cleared all bucket data from IndexedDB');
+    };
+
+    clearBucketRequest.onerror = () => {
+      console.error('[Bucket Viewer] Error clearing bucket data:', clearBucketRequest.error);
+    };
+
+    // 清空files表
+    const fileTransaction = db.transaction(['files'], 'readwrite');
+    const fileStore = fileTransaction.objectStore('files');
+    const clearFileRequest = fileStore.clear();
+
+    clearFileRequest.onsuccess = () => {
+      console.log('[Bucket Viewer] Cleared all file data from IndexedDB');
+    };
+
+    clearFileRequest.onerror = () => {
+      console.error('[Bucket Viewer] Error clearing file data:', clearFileRequest.error);
+    };
+
+  } catch (error) {
+    console.error('[Bucket Viewer] Error clearing history data:', error);
+  }
+}
+
+// 插件启动时清空历史数据
+chrome.runtime.onStartup.addListener(() => {
+  console.log('[Bucket Viewer] Extension startup detected, clearing history...');
+  clearHistoryData();
+});
+
+// 扩展安装/更新时也清空历史数据
+chrome.runtime.onInstalled.addListener(() => {
+  console.log('[Bucket Viewer] Extension installed/updated, clearing history...');
+  clearHistoryData();
+
+  // 右键菜单创建
+  chrome.contextMenus.create({
+    id: 'bucket-viewer',
+    title: 'View Bucket Contents',
+    contexts: ['link'],
+    documentUrlPatterns: ['*://*/*']
+  });
+});
 
 // 插件图标点击事件 - 直接打开查看器
-chrome.action.onClicked.addListener(async (tab) => {
+chrome.browserAction.onClicked.addListener(async (tab) => {
   console.log('[Bucket Viewer] Extension icon clicked');
 
   try {
@@ -690,69 +752,6 @@ async function getBucketDataWrapper(bucketId) {
   return safeGetBucketData(bucketId);
 }
 
-
-// 清空历史数据（插件启动时调用）
-async function clearHistoryData() {
-  try {
-    await ensureDatabase();
-
-    if (!db) {
-      console.log('[Bucket Viewer] Database not initialized, skipping history cleanup');
-      return;
-    }
-
-    console.log('[Bucket Viewer] Clearing history data on startup...');
-
-    // 清空buckets表
-    const bucketTransaction = db.transaction(['buckets'], 'readwrite');
-    const bucketStore = bucketTransaction.objectStore('buckets');
-    const clearBucketRequest = bucketStore.clear();
-
-    clearBucketRequest.onsuccess = () => {
-      console.log('[Bucket Viewer] Cleared all bucket data from IndexedDB');
-    };
-
-    clearBucketRequest.onerror = () => {
-      console.error('[Bucket Viewer] Error clearing bucket data:', clearBucketRequest.error);
-    };
-
-    // 清空files表
-    const fileTransaction = db.transaction(['files'], 'readwrite');
-    const fileStore = fileTransaction.objectStore('files');
-    const clearFileRequest = fileStore.clear();
-
-    clearFileRequest.onsuccess = () => {
-      console.log('[Bucket Viewer] Cleared all file data from IndexedDB');
-    };
-
-    clearFileRequest.onerror = () => {
-      console.error('[Bucket Viewer] Error clearing file data:', clearFileRequest.error);
-    };
-
-  } catch (error) {
-    console.error('[Bucket Viewer] Error clearing history data:', error);
-  }
-}
-
-// 插件启动时清空历史数据
-chrome.runtime.onStartup.addListener(() => {
-  console.log('[Bucket Viewer] Extension startup detected, clearing history...');
-  clearHistoryData();
-});
-
-// 扩展安装/更新时也清空历史数据
-chrome.runtime.onInstalled.addListener(() => {
-  console.log('[Bucket Viewer] Extension installed/updated, clearing history...');
-  clearHistoryData();
-
-  // 右键菜单创建
-  chrome.contextMenus.create({
-    id: 'bucket-viewer',
-    title: 'View Bucket Contents',
-    contexts: ['link'],
-    documentUrlPatterns: ['*://*/*']
-  });
-});
 
 // 初始化数据库
 initDatabase();

@@ -20,8 +20,8 @@
 
 1. **下载插件文件**
    ```bash
-   git clone https://github.com/your-username/bucketview
-   cd bucketview/bucket-viewer-extension
+   git clone https://github.com/iamHuFei/BucketViewer
+   cd BucketViewer
    ```
 
 2. **兼容浏览器**
