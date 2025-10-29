@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bucket Viewer - 存储桶查看器</title>
+  <link rel="stylesheet" href="viewer.css">
+  <!-- PDF预览现在使用轻量级方案，无需加载PDF.js库 -->
+</head>
+<body>
+  <div class="app-container">
+    <!-- 顶部功能区域 -->
+    <div class="top-features">
+      <!-- 左侧：URL输入和历史记录 - 在同一个白块内 -->
+      <div class="left-features">
+        <div class="url-section">
+          <!-- 存储桶解析输入区域 -->
+          <div class="section-part">
+            <div class="section-header">
+              <span class="section-icon">🔍</span>
+              <span class="section-title">存储桶解析</span>
+            </div>
+            <div class="section-content">
+              <!-- 主输入区域 -->
+              <div class="main-input-area">
+                <div class="input-group">
+                  <input
+                    type="url"
+                    id="bucketUrlInput"
+                    placeholder="输入存储桶URL，例如：http://minio.example.com/bucket/"
+                    class="url-input"
+                    autocomplete="off"
+                  >
+                  <button class="btn btn-primary" id="parseUrlBtn">
+                    <span class="icon">🔍</span>
+                    解析存储桶
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 分隔线 -->
+          <div class="section-divider"></div>
+
+          <!-- 中间区域：左侧空白 -->
+          <div class="section-part middle-part">
+            <!-- 这里是空白区域，用于与右侧的文件选择区域对齐 -->
+            <div class="empty-area">
+              <span class="empty-text">预留区域</span>
+            </div>
+          </div>
+
+          <!-- 分隔线 -->
+          <div class="section-divider"></div>
+
+          <!-- 最近解析历史区域 -->
+          <div class="section-part">
+            <div class="section-header">
+              <span class="section-icon">📜</span>
+              <span class="section-title">最近解析</span>
+            </div>
+            <div class="section-content">
+              <div class="history-list" id="historyList">
+                <div class="history-empty">暂无历史记录</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右侧：PUT覆盖功能 - 在同一个白块内 -->
+      <div class="right-features">
+        <div class="put-section">
+          <!-- PUT覆盖输入区域 -->
+          <div class="section-part">
+            <div class="section-header">
+              <span class="section-icon">🔧</span>
+              <span class="section-title">PUT文件覆盖</span>
+            </div>
+            <div class="section-content">
+              <!-- 覆盖路径输入 -->
+              <div class="input-group">
+                <input
+                  type="text"
+                  id="overridePathInput"
+                  placeholder="输入覆盖路径，例如：images/avatar.jpg"
+                  class="override-path-input"
+                >
+                <button class="btn btn-secondary" id="detectPutPermissionBtn">
+                  <span class="icon">🔍</span>
+                  检测权限
+                </button>
+              </div>
+
+              <!-- 状态显示区域 -->
+              <div id="putDetectionResult" class="detection-result hidden">
+                <!-- 动态内容：检测状态、结果等 -->
+              </div>
+            </div>
+          </div>
+
+          <!-- 分隔线 -->
+          <div class="section-divider"></div>
+
+          <!-- 文件选择和上传区域 -->
+          <div class="section-part middle-part">
+            <div class="section-header">
+              <span class="section-icon">📁</span>
+              <span class="section-title">选择要上传的文件</span>
+            </div>
+            <div class="section-content">
+              <div class="file-input-group">
+                <input
+                  type="file"
+                  id="overrideFileInput"
+                  class="file-input"
+                  accept="image/*,.json,.txt,.pdf,.doc,.docx,.xls,.xlsx"
+                >
+                <label for="overrideFileInput" class="file-input-label">
+                  <span class="file-input-icon">📁</span>
+                  <span class="file-input-text" id="fileInputText">选择要上传的文件</span>
+                </label>
+                <button class="btn btn-primary" id="uploadOverrideBtn">
+                  <span class="icon">⬆️</span>
+                  上传覆盖
+                </button>
+              </div>
+              <div class="file-info" id="selectedFileInfo" style="display: none;">
+                <span class="file-name" id="selectedFileName"></span>
+                <span class="file-size" id="selectedFileSize"></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 分隔线 -->
+          <div class="section-divider"></div>
+
+          <!-- 操作历史区域 -->
+          <div class="section-part">
+            <div class="section-header">
+              <span class="section-icon">📋</span>
+              <span class="section-title">操作历史</span>
+            </div>
+            <div class="section-content">
+              <div class="history-list" id="putHistoryList">
+                <div class="history-empty">暂无操作记录</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 存储桶信息区域 -->
+    <div class="bucket-info hidden" id="bucketInfo">
+      <span class="bucket-url" id="bucketUrl">加载中...</span>
+      <span class="file-count" id="fileCount">0 个文件</span>
+      <div class="bucket-actions">
+        <button class="btn btn-secondary hidden" id="refreshBtn" title="刷新数据">
+          <span class="icon">🔄</span>
+        </button>
+        <button class="btn btn-secondary hidden" id="exportBtn" title="导出数据">
+          <span class="icon">📥</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Toolbar -->
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <!-- 视图切换 -->
+        <div class="view-switcher">
+          <button class="view-btn active" data-view="grid" title="网格视图">
+            <span class="icon">⊞</span>
+          </button>
+          <button class="view-btn" data-view="list" title="列表视图">
+            <span class="icon">☰</span>
+          </button>
+        </div>
+
+        <!-- 文件类型过滤 -->
+        <div class="filter-group">
+          <select id="categoryFilter" class="filter-select">
+            <option value="">所有类型</option>
+            <option value="images">图片</option>
+            <option value="documents">文档</option>
+            <option value="videos">视频</option>
+            <option value="audio">音频</option>
+            <option value="archives">压缩包</option>
+            <option value="others">其他</option>
+          </select>
+        </div>
+
+        <!-- 搜索 -->
+        <div class="search-group">
+          <input
+            type="text"
+            id="searchInput"
+            placeholder="搜索文件名..."
+            class="search-input"
+          >
+          <button class="search-btn" id="searchBtn">
+            <span class="icon">🔍</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="toolbar-right">
+        <!-- 排序 -->
+        <div class="sort-group">
+          <select id="sortBy" class="sort-select">
+            <option value="name">按名称</option>
+            <option value="size">按大小</option>
+            <option value="modified">按修改时间</option>
+            <option value="type">按类型</option>
+          </select>
+          <button class="sort-order-btn" id="sortOrderBtn" title="排序方向">
+            <span class="icon">↑</span>
+          </button>
+        </div>
+
+        <!-- 分页信息 -->
+        <div class="pagination-info">
+          <span id="paginationInfo">显示 0-0 条，共 0 条</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <!-- Loading State -->
+      <div id="loadingState" class="loading-state">
+        <div class="loading-spinner"></div>
+        <p class="loading-text">正在加载存储桶数据...</p>
+        <div class="loading-progress">
+          <div class="progress-bar">
+            <div class="progress-fill" id="progressFill"></div>
+          </div>
+          <span class="progress-text" id="progressText">0%</span>
+        </div>
+      </div>
+
+      <!-- Empty State -->
+      <div id="emptyState" class="empty-state hidden">
+        <div class="empty-icon">📁</div>
+        <h3>没有找到文件</h3>
+        <p>该存储桶中没有文件或没有符合条件的文件。</p>
+      </div>
+
+      <!-- Error State -->
+      <div id="errorState" class="error-state hidden">
+        <div class="error-icon">⚠️</div>
+        <h3>加载失败</h3>
+        <p id="errorMessage">加载存储桶数据时发生错误。</p>
+        <button class="btn btn-primary" id="retryBtn">重试</button>
+      </div>
+
+      <!-- Grid View -->
+      <div id="gridView" class="grid-view hidden">
+        <div class="file-grid" id="fileGrid">
+          <!-- 文件网格将在这里动态生成 -->
+        </div>
+      </div>
+
+      <!-- List View -->
+      <div id="listView" class="list-view hidden">
+        <div class="file-list-container">
+          <table class="file-list" id="fileList">
+            <thead>
+              <tr>
+                <th class="sortable" data-sort="name">名称</th>
+                <th class="sortable" data-sort="size">大小</th>
+                <th class="sortable" data-sort="modified">修改时间</th>
+                <th class="sortable" data-sort="type">类型</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="fileListBody">
+              <!-- 文件列表将在这里动态生成 -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+
+    <!-- Pagination -->
+    <div class="pagination" id="pagination">
+      <button class="page-btn" id="firstPageBtn" title="首页">
+        <span class="icon">⏮</span>
+      </button>
+      <button class="page-btn" id="prevPageBtn" title="上一页">
+        <span class="icon">◀</span>
+      </button>
+      <div class="page-numbers" id="pageNumbers">
+        <!-- 页码将在这里动态生成 -->
+      </div>
+      <button class="page-btn" id="nextPageBtn" title="下一页">
+        <span class="icon">▶</span>
+      </button>
+      <button class="page-btn" id="lastPageBtn" title="末页">
+        <span class="icon">⏭</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Image Preview Modal -->
+  <div id="imagePreviewModal" class="modal hidden">
+    <div class="modal-backdrop" id="modalBackdrop"></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="previewTitle">图片预览</h3>
+        <button class="modal-close" id="modalClose">
+          <span class="icon">✕</span>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="image-preview-container">
+          <img id="previewImage" src="" alt="预览图片" class="preview-image">
+          <div class="preview-controls">
+            <button class="preview-btn" id="zoomInBtn" title="放大">
+              <span class="icon">🔍</span>
+            </button>
+            <button class="preview-btn" id="zoomOutBtn" title="缩小">
+              <span class="icon">🔍</span>
+            </button>
+            <button class="preview-btn" id="downloadBtn" title="下载">
+              <span class="icon">📥</span>
+            </button>
+            <button class="preview-btn" id="prevImageBtn" title="上一张">
+              <span class="icon">◀</span>
+            </button>
+            <button class="preview-btn" id="nextImageBtn" title="下一张">
+              <span class="icon">▶</span>
+            </button>
+          </div>
+        </div>
+        <div class="image-info">
+          <p id="imageInfo">文件信息</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Download Progress Modal -->
+  <div id="downloadModal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content download-modal">
+      <div class="modal-header">
+        <h3>下载进度</h3>
+      </div>
+      <div class="modal-body">
+        <div class="download-list" id="downloadList">
+          <!-- 下载进度将在这里显示 -->
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="closeDownloadBtn">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="viewer.js"></script>
+<script src="viewer_firefox.js"></script>
+</body>
+</html>
