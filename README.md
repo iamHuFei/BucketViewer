@@ -42,6 +42,10 @@
 
 Release选择对应浏览器插件下载安装
 
+- 谷歌和Edge下载完成bucketviewer-chrome-1.0.0.zip后直接拖拽进行拓展界面安装
+
+- 火狐浏览器正在审核中，后续支持，现可以通过下载bucketviewer-firefox-1.0.0.zip解压后在about:debugging#/runtime/this-firefox临时加载插件使用
+
 ## 📖 使用指南
 
 ### 基本使用
