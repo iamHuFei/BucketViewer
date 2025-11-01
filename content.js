@@ -1,6 +1,36 @@
 // Content Script for Bucket Viewer Extension
 // 负责检测页面中的存储桶链接并提供交互功能
 
+// 安全的DOM操作辅助函数
+function safeAddToHead(element, id) {
+  if (document.head) {
+    if (!document.querySelector(`#${id}`)) {
+      element.id = id;
+      document.head.appendChild(element);
+    }
+    return true;
+  } else {
+    // 如果document.head不存在，等待DOM加载完成
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => {
+        if (document.head && !document.querySelector(`#${id}`)) {
+          element.id = id;
+          document.head.appendChild(element);
+        }
+      });
+    } else {
+      // DOM已加载但head仍不存在，创建head元素
+      const head = document.createElement('head');
+      document.documentElement.insertBefore(head, document.documentElement.firstChild);
+      if (!document.querySelector(`#${id}`)) {
+        element.id = id;
+        head.appendChild(element);
+      }
+    }
+    return true;
+  }
+}
+
 class BucketLinkDetector {
   constructor() {
     this.bucketPatterns = [
@@ -8,6 +38,7 @@ class BucketLinkDetector {
       /.*\.s3-.*\.amazonaws\.com/,
       /.*s3.*\.aliyuncs\.com/,
       /.*obs.*\.myhuaweicloud\.com/,
+      /.*obs.*\.ctyun\.cn/,
       /.*cos.*\.myqcloud\.com/,
       /.*\.oss-.*\.aliyuncs\.com/,
       /.*storage\.googleapis\.com/,
@@ -35,7 +66,8 @@ class BucketLinkDetector {
     // 监听来自background的消息
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.type === 'showNotification') {
-        this.showNotification(message.message);
+        const notificationType = message.notificationType || 'info';
+        this.showNotification(message.message, notificationType);
         sendResponse({ success: true });
       }
     });
@@ -123,10 +155,7 @@ class BucketLinkDetector {
       }
     `;
 
-    if (!document.querySelector('#bucket-viewer-styles')) {
-      style.id = 'bucket-viewer-styles';
-      document.head.appendChild(style);
-    }
+    safeAddToHead(style, 'bucket-viewer-styles');
   }
 
   observeContentChanges() {
@@ -240,15 +269,18 @@ class BucketLinkDetector {
         color: #0c5460;
       }
 
+      .bucket-viewer-notification.bucket-viewer-warning {
+        border-color: #ffc107;
+        background-color: #fff3cd;
+        color: #856404;
+      }
+
       .bucket-viewer-notification.show {
         transform: translateX(0);
       }
     `;
 
-    if (!document.querySelector('#bucket-viewer-notification-styles')) {
-      style.id = 'bucket-viewer-notification-styles';
-      document.head.appendChild(style);
-    }
+    safeAddToHead(style, 'bucket-viewer-notification-styles');
 
     // 添加到页面
     document.body.appendChild(notification);
@@ -269,12 +301,17 @@ class BucketLinkDetector {
     }, 3000);
   }
 
-  // 检测当前页面是否本身就是存储桶页面
+  // 检测当前页面是否本身就是存储桶页面（现在支持所有页面）
   checkCurrentPage() {
-    if (this.isBucketUrl(window.location.href)) {
-      console.log('[Bucket Viewer] Current page is a bucket URL');
-
-      // 可以在页面上添加一个浮动按钮
+    // 确保DOM已准备好
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => {
+        console.log('[Bucket Viewer] DOM loaded, adding floating button');
+        this.addFloatingButton();
+      });
+    } else {
+      // DOM已经准备好
+      console.log('[Bucket Viewer] Adding floating button to page');
       this.addFloatingButton();
     }
   }
@@ -318,10 +355,7 @@ class BucketLinkDetector {
       }
     `;
 
-    if (!document.querySelector('#bucket-viewer-floating-styles')) {
-      style.id = 'bucket-viewer-floating-styles';
-      document.head.appendChild(style);
-    }
+    safeAddToHead(style, 'bucket-viewer-floating-styles');
 
     // 添加点击事件
     button.addEventListener('click', async () => {

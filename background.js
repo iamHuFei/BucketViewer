@@ -1,6 +1,86 @@
-// Background Service Worker for Bucket Viewer Extension
+// Unified Background Script for Bucket Viewer Extension
+// Compatible with both Firefox (Manifest V2) and Chrome (Manifest V3)
 
 let db = null;
+
+// ============= 浏览器检测和API抽象层 =============
+
+// 获取Manifest版本信息 (在初始化阶段必须直接使用chrome)
+const manifest = chrome.runtime.getManifest();
+const isManifestV2 = manifest.manifest_version === 2;
+const isManifestV3 = manifest.manifest_version === 3;
+
+// 通过UserAgent进一步确认浏览器类型
+const userAgent = navigator.userAgent || '';
+const isFirefox = /firefox/i.test(userAgent);
+const isChrome = /chrome/i.test(userAgent) && !isFirefox;
+
+console.log('[Bucket Viewer] Browser detection:', {
+  manifestVersion: manifest.manifest_version,
+  isFirefox,
+  isChrome,
+  isManifestV2,
+  isManifestV3
+});
+
+// 统一的API抽象层
+const browserAPI = {
+  // Action API (browserAction for MV2, action for MV3)
+  action: isManifestV2 ? chrome.browserAction : chrome.action,
+
+  // 运行时API
+  runtime: chrome.runtime,
+
+  // 标签页API
+  tabs: chrome.tabs,
+
+  // 上下文菜单API
+  contextMenus: chrome.contextMenus,
+
+  // 消息API
+  messaging: {
+    sendMessage: chrome.runtime.sendMessage,
+    onMessage: chrome.runtime.onMessage
+  },
+
+  // 下载API
+  downloads: chrome.downloads,
+
+  // 存储API
+  storage: chrome.storage,
+
+  // 检查API可用性的工具函数
+  isAvailable: function(apiName) {
+    try {
+      return !!this[apiName];
+    } catch (e) {
+      return false;
+    }
+  }
+};
+
+// ============= 浏览器特定配置 =============
+
+const browserConfig = {
+  // Firefox MV2 特有配置
+  firefox: {
+    hasStartupEvent: true,
+    hasTabsPermission: true,
+    needsHistoryCleanup: true,
+    supportedAPIs: ['browserAction', 'tabs', 'contextMenus', 'downloads', 'storage']
+  },
+
+  // Chrome MV3 特有配置
+  chrome: {
+    hasStartupEvent: true,
+    hasTabsPermission: false, // MV3需要单独的tabs权限
+    needsHistoryCleanup: true,
+    supportedAPIs: ['action', 'tabs', 'contextMenus', 'downloads', 'storage']
+  }
+};
+
+// 获取当前浏览器配置
+const currentConfig = isFirefox ? browserConfig.firefox : browserConfig.chrome;
 let dbInitialized = false;
 let dbInitPromise = null;
 
@@ -98,25 +178,10 @@ async function initDatabase() {
   }
 }
 
-// 检测存储桶链接的函数
+// 检测存储桶链接的函数（现在支持所有URL）
 function isBucketUrl(url) {
-  const bucketPatterns = [
-    /.*s3.*\.amazonaws\.com/,
-    /.*\.s3-.*\.amazonaws\.com/,
-    /.*s3.*\.aliyuncs\.com/,
-    /.*obs.*\.myhuaweicloud\.com/,
-    /.*cos.*\.myqcloud\.com/,
-    /.*\.oss-.*\.aliyuncs\.com/,
-    /.*storage\.googleapis\.com/,
-    // MinIO 服务器支持
-    /.*minio\..*/,
-    // 通用对象存储模式 - 更宽松的检测
-    /^[a-z]+:\/\/[a-z0-9.-]+\/[a-z0-9-_]+\/?$/i,
-    // 检测是否包含常见的存储桶路径模式
-    /\/[a-z0-9-_]+\/?$/i
-  ];
-
-  return bucketPatterns.some(pattern => pattern.test(url));
+  // 移除URL格式检测，支持所有URL
+  return true;
 }
 
 // 解析存储桶数据（移植自 ossx.py 的核心逻辑）
@@ -211,10 +276,60 @@ async function parseBucketData(bucketUrl, baseUrl = null) {
 
     const bucketId = await safeSaveBucket(bucketData);
 
-    // 递归获取所有数据
-    await fetchAllPages(bucketUrl, baseUrl, maxKeys, bucketId, childTags);
+    // 默认只加载第一页数据（最多1000条文件）
+    const firstPageResult = await fetchFirstPageOnly(bucketUrl, baseUrl, maxKeys, bucketId, childTags);
 
-    return { success: true, bucketId, fileCount: await getFileCount(bucketId) };
+    const filesInFirstPage = await getFileCount(bucketId);
+
+    // 改进的分页检测逻辑
+    let hasMorePages = false;
+
+    // 方法1：检查NextMarker
+    if (nextMarker !== null) {
+      hasMorePages = true;
+      console.log('[Bucket Viewer] More pages detected via NextMarker');
+    }
+
+    // 方法2：检查IsTruncated标志
+    if (parsedData.isTruncated === true) {
+      hasMorePages = true;
+      console.log('[Bucket Viewer] More pages detected via IsTruncated=true');
+    }
+
+    // 方法3：如果文件数量正好等于maxKeys，很可能还有更多页面
+    if (filesInFirstPage >= parseInt(maxKeys)) {
+      hasMorePages = true;
+      console.log('[Bucket Viewer] More pages suspected: files >= maxKeys');
+    }
+
+    // 方法4：检查hasMorePagesIndicated标志
+    if (parsedData.hasMorePagesIndicated === true) {
+      hasMorePages = true;
+      console.log('[Bucket Viewer] More pages indicated by hasMorePagesIndicated flag');
+    }
+
+    console.log('[Bucket Viewer] Enhanced pagination info:', {
+      nextMarker: nextMarker,
+      isTruncated: parsedData.isTruncated,
+      hasMorePagesIndicated: parsedData.hasMorePagesIndicated,
+      hasMorePages: hasMorePages,
+      maxKeys: maxKeys,
+      filesInFirstPage: filesInFirstPage,
+      shouldShowButton: hasMorePages
+    });
+
+    // 详细的分析信息
+    if (filesInFirstPage >= parseInt(maxKeys)) {
+      console.log('[Bucket Viewer] Analysis: File count equals or exceeds maxKeys, likely has more pages');
+    }
+
+    if (hasMorePages) {
+      console.log('[Bucket Viewer] CONCLUSION: This bucket has multiple pages, load all button should be shown');
+    } else {
+      console.log('[Bucket Viewer] CONCLUSION: This appears to be a single-page bucket');
+    }
+
+    return { success: true, bucketId, fileCount: await getFileCount(bucketId), hasMorePages, maxKeys };
 
   } catch (error) {
     console.error('[Bucket Viewer] Error parsing bucket:', error);
@@ -224,10 +339,10 @@ async function parseBucketData(bucketUrl, baseUrl = null) {
 
 // DOM 解析函数已移除，现在使用正则表达式解析XML以兼容Service Worker环境
 
-// 递归获取所有分页数据
-async function fetchAllPages(bucketUrl, baseUrl, maxKeys, bucketId, childTags, marker = '', page = 0) {
+// 只获取第一页数据（避免大文件量加载时的长时间等待）
+async function fetchFirstPageOnly(bucketUrl, baseUrl, maxKeys, bucketId, childTags) {
   try {
-    const url = marker ? `${bucketUrl}?max-keys=${maxKeys}&marker=${marker}` : `${bucketUrl}?max-keys=${maxKeys}`;
+    const url = `${bucketUrl}?max-keys=${maxKeys}`;
 
     const response = await fetch(url);
     const xmlText = await response.text();
@@ -236,8 +351,8 @@ async function fetchAllPages(bucketUrl, baseUrl, maxKeys, bucketId, childTags, m
     const parsedData = parseXMLWithRegex(xmlText);
 
     if (!parsedData.success) {
-      console.error('[Bucket Viewer] Error parsing page XML:', parsedData.error);
-      return;
+      console.error('[Bucket Viewer] Error parsing first page XML:', parsedData.error);
+      return { hasMorePages: false };
     }
 
     const files = [];
@@ -273,8 +388,107 @@ async function fetchAllPages(bucketUrl, baseUrl, maxKeys, bucketId, childTags, m
     // 保存文件数据
     await safeSaveFiles(bucketId, files);
 
+    console.log(`[Bucket Viewer] First page loaded: Found ${files.length} files`);
+
+    // 返回是否有更多页面的信息
+    return {
+      hasMorePages: parsedData.nextMarker !== null
+    };
+
+  } catch (error) {
+    console.error('[Bucket Viewer] Error fetching first page:', error);
+    return { hasMorePages: false };
+  }
+}
+
+// 递归获取所有分页数据（用于手动确认加载全部数据）
+async function fetchAllPages(bucketUrl, baseUrl, maxKeys, bucketId, childTags, marker = '', page = 0) {
+  try {
+    const url = marker ? `${bucketUrl}?max-keys=${maxKeys}&marker=${marker}` : `${bucketUrl}?max-keys=${maxKeys}`;
+
+    const response = await fetch(url);
+    const xmlText = await response.text();
+
+    // 使用正则表达式解析XML
+    const parsedData = parseXMLWithRegex(xmlText);
+
+    if (!parsedData.success) {
+      console.error('[Bucket Viewer] Error parsing page XML:', parsedData.error);
+      return;
+    }
+
+    const files = [];
+
+    // 检查当前文件数量
+    const currentFileCount = await getFileCount(bucketId);
+    const MAX_FILES = 10000;
+
+    console.log(`[Bucket Viewer] Current file count: ${currentFileCount}, Max files: ${MAX_FILES}`);
+
+    // 处理解析到的内容
+    parsedData.contents.forEach(contentData => {
+      // 检查是否达到文件数量限制
+      if (currentFileCount + files.length >= MAX_FILES) {
+        console.log(`[Bucket Viewer] Reached ${MAX_FILES} file limit, stopping loading`);
+        return; // 跳过添加更多文件
+      }
+
+      const fileData = {};
+
+      // 提取所有字段
+      childTags.forEach(tag => {
+        fileData[tag] = contentData[tag] || '';
+      });
+
+      // 构建完整URL - 修复：使用bucketUrl而不是baseUrl来确保包含存储桶路径
+      const key = fileData.Key || '';
+      if (key) {
+        fileData.url = bucketUrl + key;
+        console.log('[Bucket Viewer] Building file URL:', {
+          bucketUrl: bucketUrl,
+          key: key,
+          fullUrl: fileData.url
+        });
+
+        // 提取文件类型
+        const parts = key.split('.');
+        fileData.file_type = parts.length > 1 ? parts[parts.length - 1].toLowerCase() : '';
+        fileData.category = getFileCategory(fileData.file_type);
+      }
+
+      files.push(fileData);
+    });
+
+    // 保存文件数据（即使部分文件也可以保存）
+    if (files.length > 0) {
+      await safeSaveFiles(bucketId, files);
+    }
+
     page += 1;
     console.log(`[Bucket Viewer] Page ${page}: Found ${files.length} files`);
+
+    // 检查当前总文件数是否达到限制
+    const totalFileCount = await getFileCount(bucketId);
+    if (totalFileCount >= MAX_FILES) {
+      console.log(`[Bucket Viewer] Stopping at ${MAX_FILES} files to prevent browser freezing`);
+
+      // 发送消息给content script显示通知
+      try {
+        // 获取当前活动标签页
+        const tabs = await browserAPI.tabs.query({ active: true, currentWindow: true });
+        if (tabs.length > 0) {
+          browserAPI.tabs.sendMessage(tabs[0].id, {
+            type: 'showNotification',
+            message: `已达到${MAX_FILES}个文件限制，停止加载以防止浏览器卡死。当前已加载${totalFileCount}个文件。`,
+            notificationType: 'warning'
+          });
+        }
+      } catch (msgError) {
+        console.log('[Bucket Viewer] Could not send notification:', msgError);
+      }
+
+      return; // 停止加载更多页面
+    }
 
     // 检查是否还有下一页
     const nextMarker = parsedData.nextMarker;
@@ -466,18 +680,25 @@ async function clearHistoryData() {
 }
 
 // 插件启动时清空历史数据
-chrome.runtime.onStartup.addListener(() => {
-  console.log('[Bucket Viewer] Extension startup detected, clearing history...');
-  clearHistoryData();
-});
+// 启动事件处理 (仅在支持的浏览器中)
+if (currentConfig.hasStartupEvent) {
+  browserAPI.runtime.onStartup.addListener(() => {
+    console.log('[Bucket Viewer] Extension startup detected, clearing history...');
+    if (currentConfig.needsHistoryCleanup) {
+      clearHistoryData();
+    }
+  });
+}
 
-// 扩展安装/更新时也清空历史数据
-chrome.runtime.onInstalled.addListener(() => {
+// 扩展安装/更新事件处理
+browserAPI.runtime.onInstalled.addListener(() => {
   console.log('[Bucket Viewer] Extension installed/updated, clearing history...');
-  clearHistoryData();
+  if (currentConfig.needsHistoryCleanup) {
+    clearHistoryData();
+  }
 
   // 右键菜单创建
-  chrome.contextMenus.create({
+  browserAPI.contextMenus.create({
     id: 'bucket-viewer',
     title: 'View Bucket Contents',
     contexts: ['link'],
@@ -485,8 +706,8 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
-// 插件图标点击事件 - 直接打开查看器
-chrome.browserAction.onClicked.addListener(async (tab) => {
+// 插件图标点击事件 - 统一处理Firefox和Chrome
+browserAPI.action.onClicked.addListener(async (tab) => {
   console.log('[Bucket Viewer] Extension icon clicked');
 
   try {
@@ -494,38 +715,38 @@ chrome.browserAction.onClicked.addListener(async (tab) => {
     if (tab.url && isBucketUrl(tab.url)) {
       console.log('[Bucket Viewer] Current page is bucket URL, opening viewer with URL parameter');
       // 立即打开查看器页面并传递URL参数，让前端处理解析
-      chrome.tabs.create({
-        url: chrome.runtime.getURL('viewer/viewer.html') + `?url=${encodeURIComponent(tab.url)}`
+      browserAPI.tabs.create({
+        url: browserAPI.runtime.getURL('viewer/viewer.html') + `?url=${encodeURIComponent(tab.url)}`
       });
     } else {
       // 如果不是存储桶URL，打开普通的查看器页面
       console.log('[Bucket Viewer] Opening viewer for manual URL input');
-      chrome.tabs.create({
-        url: chrome.runtime.getURL('viewer/viewer.html')
+      browserAPI.tabs.create({
+        url: browserAPI.runtime.getURL('viewer/viewer.html')
       });
     }
   } catch (error) {
     console.error('[Bucket Viewer] Error handling icon click:', error);
     // 出错时也打开查看器页面
-    chrome.tabs.create({
-      url: chrome.runtime.getURL('viewer/viewer.html')
+    browserAPI.tabs.create({
+      url: browserAPI.runtime.getURL('viewer/viewer.html')
     });
   }
 });
 
 // 右键菜单点击事件
-chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+browserAPI.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === 'bucket-viewer') {
     const url = info.linkUrl;
 
     if (isBucketUrl(url)) {
       // 打开查看器标签页
-      chrome.tabs.create({
-        url: chrome.runtime.getURL('viewer/viewer.html') + `?bucket=${encodeURIComponent(url)}`
+      browserAPI.tabs.create({
+        url: browserAPI.runtime.getURL('viewer/viewer.html') + `?bucket=${encodeURIComponent(url)}`
       });
     } else {
       // 显示不支持的消息
-      chrome.tabs.sendMessage(tab.id, {
+      browserAPI.tabs.sendMessage(tab.id, {
         type: 'showNotification',
         message: 'This URL doesn\'t appear to be a supported bucket URL.'
       });
@@ -534,7 +755,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 });
 
 // 处理来自popup和content script的消息
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+browserAPI.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // 确保数据库已初始化
   ensureDatabase().then(() => {
     if (request.type === 'parseBucket') {
@@ -552,8 +773,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.type === 'openBucketViewer') {
-      chrome.tabs.create({
-        url: chrome.runtime.getURL('viewer/viewer.html') + `?url=${encodeURIComponent(request.url)}`
+      browserAPI.tabs.create({
+        url: browserAPI.runtime.getURL('viewer/viewer.html') + `?url=${encodeURIComponent(request.url)}`
       }).then(tab => {
         sendResponse({ success: true, tabId: tab.id });
       }).catch(error => {
@@ -564,6 +785,27 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     if (request.type === 'getRecentBuckets') {
       getRecentBuckets()
+        .then(result => sendResponse(result))
+        .catch(error => sendResponse({ success: false, error: error.message }));
+      return true;
+    }
+
+    if (request.type === 'loadAllPages') {
+      loadAllBucketPages(request.bucketId, request.bucketUrl, request.maxKeys)
+        .then(result => sendResponse(result))
+        .catch(error => sendResponse({ success: false, error: error.message }));
+      return true;
+    }
+
+    if (request.type === 'loadNextPage') {
+      loadNextPageData(request.bucketId, request.bucketUrl, request.maxKeys, request.nextMarker)
+        .then(result => sendResponse(result))
+        .catch(error => sendResponse({ success: false, error: error.message }));
+      return true;
+    }
+
+    if (request.type === 'loadSpecificPage') {
+      loadSpecificPageData(request.bucketId, request.bucketUrl, request.pageNumber, request.maxKeys)
         .then(result => sendResponse(result))
         .catch(error => sendResponse({ success: false, error: error.message }));
       return true;
@@ -681,6 +923,27 @@ function parseXMLWithRegex(xmlText) {
     if (nextMarkerMatch) {
       result.nextMarker = nextMarkerMatch[1].trim();
       console.log('[Bucket Viewer] Found NextMarker:', result.nextMarker);
+    } else {
+      console.log('[Bucket Viewer] No NextMarker found in XML');
+    }
+
+    // 检查IsTruncated标志（这是更可靠的分页指示器）
+    const isTruncatedMatch = xmlText.match(/<IsTruncated[^>]*>(.*?)<\/IsTruncated>/i);
+    if (isTruncatedMatch) {
+      const isTruncated = isTruncatedMatch[1].trim().toLowerCase() === 'true';
+      result.isTruncated = isTruncated;
+      console.log('[Bucket Viewer] IsTruncated flag:', isTruncated);
+
+      // 如果IsTruncated为true但没有NextMarker，这表示有更多页面但需要用其他方式获取
+      if (isTruncated && !result.nextMarker) {
+        console.log('[Bucket Viewer] Has more pages (IsTruncated=true) but no NextMarker provided');
+        // 在某些情况下，可能需要使用最后一个文件的Key作为NextMarker
+        // 这里我们设置一个标志，让后续逻辑知道有更多页面
+        result.hasMorePagesIndicated = true;
+      }
+    } else {
+      console.log('[Bucket Viewer] No IsTruncated flag found');
+      result.isTruncated = false;
     }
 
     // 提取所有Contents元素
@@ -752,6 +1015,150 @@ async function getBucketDataWrapper(bucketId) {
   return safeGetBucketData(bucketId);
 }
 
+
+// 加载存储桶的所有页面数据（用于手动确认后加载全部数据）
+async function loadAllBucketPages(bucketId, bucketUrl, maxKeys = '1000') {
+  try {
+    console.log('[Bucket Viewer] Starting to load all pages for bucket:', bucketId);
+
+    // 获取存储桶信息以获取child_tags
+    const bucketTransaction = db.transaction(['buckets'], 'readonly');
+    const bucketStore = bucketTransaction.objectStore('buckets');
+    const bucketRequest = bucketStore.get(bucketId);
+
+    return new Promise((resolve, reject) => {
+      bucketRequest.onsuccess = async () => {
+        const bucket = bucketRequest.result;
+        if (!bucket) {
+          reject(new Error('Bucket not found'));
+          return;
+        }
+
+        const childTags = bucket.child_tags || [];
+        const baseUrl = bucket.base_url;
+
+        // 删除现有文件数据
+        await safeDeleteFilesForBucket(bucketId);
+
+        // 递归获取所有页面数据
+        await fetchAllPages(bucketUrl, baseUrl, maxKeys, bucketId, childTags);
+
+        const finalFileCount = await getFileCount(bucketId);
+        console.log('[Bucket Viewer] All pages loaded, total files:', finalFileCount);
+
+        resolve({ success: true, fileCount: finalFileCount });
+      };
+
+      bucketRequest.onerror = () => reject(bucketRequest.error);
+    });
+
+  } catch (error) {
+    console.error('[Bucket Viewer] Error loading all bucket pages:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// 加载下一页数据
+async function loadNextPageData(bucketId, bucketUrl, maxKeys = '1000', nextMarker = null) {
+  try {
+    console.log('[Bucket Viewer] Loading next page:', { bucketId, bucketUrl, maxKeys, nextMarker });
+
+    // 获取存储桶信息
+    const bucketTransaction = db.transaction(['buckets'], 'readonly');
+    const bucketStore = bucketTransaction.objectStore('buckets');
+    const bucketRequest = bucketStore.get(bucketId);
+
+    return new Promise((resolve, reject) => {
+      bucketRequest.onsuccess = async () => {
+        const bucket = bucketRequest.result;
+        if (!bucket) {
+          reject(new Error('Bucket not found'));
+          return;
+        }
+
+        const childTags = bucket.child_tags || [];
+        const baseUrl = bucket.base_url;
+
+        // 构建URL，如果有nextMarker则使用它
+        let url = `${bucketUrl}?max-keys=${maxKeys}`;
+        if (nextMarker) {
+          url += `&marker=${encodeURIComponent(nextMarker)}`;
+        }
+
+        console.log('[Bucket Viewer] Fetching next page URL:', url);
+
+        const response = await fetch(url);
+        const xmlText = await response.text();
+
+        // 解析XML
+        const parsedData = parseXMLWithRegex(xmlText);
+        if (!parsedData.success) {
+          reject(new Error(`Failed to parse XML: ${parsedData.error}`));
+          return;
+        }
+
+        const files = [];
+
+        // 处理新获取的文件
+        parsedData.contents.forEach(contentData => {
+          const fileData = {};
+
+          childTags.forEach(tag => {
+            fileData[tag] = contentData[tag] || '';
+          });
+
+          const key = fileData.Key || '';
+          if (key) {
+            fileData.url = bucketUrl + key;
+            fileData.file_type = key.split('.').pop().toLowerCase();
+            fileData.category = getFileCategory(fileData.file_type);
+          }
+
+          files.push(fileData);
+        });
+
+        // 保存新文件数据（追加到现有数据）
+        await safeSaveFiles(bucketId, files);
+
+        // 返回结果
+        resolve({
+          success: true,
+          filesLoaded: files.length,
+          nextMarker: parsedData.nextMarker,
+          hasMorePages: parsedData.nextMarker !== null
+        });
+      };
+
+      bucketRequest.onerror = () => reject(bucketRequest.error);
+    });
+
+  } catch (error) {
+    console.error('[Bucket Viewer] Error loading next page:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// 加载指定页面数据（简化实现，实际应该从缓存或重新解析）
+async function loadSpecificPageData(bucketId, bucketUrl, pageNumber, maxKeys = '1000') {
+  try {
+    console.log('[Bucket Viewer] Loading specific page:', { bucketId, bucketUrl, pageNumber, maxKeys });
+
+    // 简化实现：如果是第一页，直接返回现有数据
+    if (pageNumber === 1) {
+      const fileCount = await getFileCount(bucketId);
+      return { success: true, filesLoaded: fileCount, hasMorePages: fileCount >= parseInt(maxKeys) };
+    }
+
+    // 对于其他页面，这里简化处理为加载下一页
+    // 实际实现应该缓存页面数据或重新从指定位置开始解析
+    const result = await loadNextPageData(bucketId, bucketUrl, maxKeys);
+    return result;
+
+  } catch (error) {
+    console.error('[Bucket Viewer] Error loading specific page:', error);
+    return { success: false, error: error.message };
+  }
+}
 
 // 初始化数据库
 initDatabase();

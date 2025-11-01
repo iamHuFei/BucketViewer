@@ -2251,6 +2251,107 @@ body {
   line-height: 1.4;
 }
 
+/* 分页控制区域 */
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  border: 1px solid #e5e7eb;
+  margin-top: 8px;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.pagination-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.pagination-total {
+  font-weight: 600;
+  color: #374151;
+}
+
+.pagination-buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.page-jump {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: #374151;
+}
+
+.page-input {
+  width: 60px;
+  padding: 4px 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  font-size: 13px;
+  text-align: center;
+}
+
+.page-input:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.pagination-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.batch-select {
+  padding: 6px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  font-size: 13px;
+  background: white;
+  cursor: pointer;
+}
+
+.batch-select:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.btn-sm {
+  padding: 6px 10px;
+  font-size: 12px;
+  min-width: auto;
+}
+
+.btn-sm:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 分页按钮状态 */
+.pagination-buttons button:not(:disabled):hover {
+  background-color: #1e40af;
+  transform: translateY(-1px);
+}
+
+.pagination-buttons button:disabled {
+  background-color: #e5e7eb;
+  color: #9ca3af;
+  cursor: not-allowed;
+}
+
 /* 响应式设计 */
 @media (max-width: 768px) {
   .pdf-browser-controls {
@@ -2263,4 +2364,42 @@ body {
     width: 100%;
     justify-content: center;
   }
+
+  .pagination-controls {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .pagination-buttons {
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .pagination-actions {
+    justify-content: center;
+  }
+}
+
+/* 文件限制状态样式 */
+.file-limit-warning {
+  color: #dc3545;
+  font-weight: bold;
+  font-size: 0.9em;
+  margin-left: 8px;
+  background-color: #f8d7da;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid #f5c6cb;
+}
+
+.file-limit-notice {
+  color: #856404;
+  font-weight: bold;
+  font-size: 0.9em;
+  margin-left: 8px;
+  background-color: #fff3cd;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid #ffeaa7;
 }

@@ -160,9 +160,52 @@
         <button class="btn btn-secondary hidden" id="refreshBtn" title="刷新数据">
           <span class="icon">🔄</span>
         </button>
+        <button class="btn btn-secondary hidden" id="loadAllBtn" title="加载全部数据">
+          <span class="icon">⬇️</span> 加载全部
+        </button>
         <button class="btn btn-secondary hidden" id="exportBtn" title="导出数据">
           <span class="icon">📥</span>
         </button>
+      </div>
+
+      <!-- 分页控制区域 -->
+      <div class="pagination-controls hidden" id="paginationControls">
+        <div class="pagination-info">
+          <span id="paginationStatus">显示第 1-1000 条</span>
+          <span class="pagination-total" id="paginationTotal">共 0 条</span>
+        </div>
+        <div class="pagination-buttons">
+          <button class="btn btn-sm" id="firstPageBtn" title="首页">
+            <span class="icon">⏮️</span>
+          </button>
+          <button class="btn btn-sm" id="prevPageBtn" title="上一页">
+            <span class="icon">◀️</span>
+          </button>
+          <div class="page-jump">
+            <input type="number" id="pageJumpInput" class="page-input" min="1" value="1" title="跳转到指定页面">
+            <span>/</span>
+            <span id="totalPages">1</span>
+          </div>
+          <button class="btn btn-sm" id="nextPageBtn" title="下一页">
+            <span class="icon">▶️</span>
+          </button>
+          <button class="btn btn-sm" id="lastPageBtn" title="末页">
+            <span class="icon">⏭️</span>
+          </button>
+        </div>
+        <div class="pagination-actions">
+          <select id="batchLoadSize" class="batch-select" title="批量加载页数">
+            <option value="1">加载1页</option>
+            <option value="5">加载5页</option>
+            <option value="10" selected>加载10页</option>
+            <option value="50">加载50页</option>
+            <option value="all">加载全部</option>
+          </select>
+          <button class="btn btn-primary" id="batchLoadBtn" title="批量加载">
+            <span class="icon">⬇️</span>
+            批量加载
+          </button>
+        </div>
       </div>
     </div>
 
@@ -361,6 +404,49 @@
   </div>
 
   <script src="viewer.js"></script>
-<script src="viewer_firefox.js"></script>
+
+<!-- Debug Script -->
+<script>
+  // 等待页面完全加载后添加调试函数
+  setTimeout(() => {
+    console.log('[Debug] Adding simple debug functions...');
+
+    // 简单的调试函数
+    window.debugCheck = function() {
+      console.log('=== SIMPLE DEBUG ===');
+      console.log('window.viewer:', !!window.viewer);
+      console.log('window.bucketViewer:', !!window.bucketViewer);
+
+      const viewer = window.viewer || window.bucketViewer;
+      if (viewer) {
+        console.log('Files loaded:', viewer.files.length);
+        console.log('Has more pages:', viewer.hasMorePages);
+        console.log('Max keys:', viewer.maxKeys);
+
+        // 显示按钮（现在默认总是显示）
+        console.log('Showing load all button (always visible now)...');
+        viewer.showLoadAllButton();
+      } else {
+        console.log('Viewer not found, trying to access BucketViewer class...');
+        if (typeof BucketViewer !== 'undefined') {
+          console.log('BucketViewer class found, viewer may be initializing...');
+        }
+      }
+    };
+
+    // 强制显示按钮
+    window.forceShowButton = function() {
+      console.log('Showing load all button (always visible)...');
+      const viewer = window.viewer || window.bucketViewer;
+      if (viewer) {
+        viewer.showLoadAllButton();
+        console.log('Button should now be visible');
+      }
+    };
+
+    console.log('Simple debug functions loaded. Try: debugCheck() or forceShowButton()');
+  }, 500);
+</script>
+
 </body>
 </html>

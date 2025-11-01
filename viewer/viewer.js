@@ -1,5 +1,35 @@
 // Viewer JavaScript - 存储桶查看器主逻辑
 
+// 安全的DOM操作辅助函数
+function safeAddToHead(element, id) {
+  if (document.head) {
+    if (!document.querySelector(`#${id}`)) {
+      element.id = id;
+      document.head.appendChild(element);
+    }
+    return true;
+  } else {
+    // 如果document.head不存在，等待DOM加载完成
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => {
+        if (document.head && !document.querySelector(`#${id}`)) {
+          element.id = id;
+          document.head.appendChild(element);
+        }
+      });
+    } else {
+      // DOM已加载但head仍不存在，创建head元素
+      const head = document.createElement('head');
+      document.documentElement.insertBefore(head, document.documentElement.firstChild);
+      if (!document.querySelector(`#${id}`)) {
+        element.id = id;
+        head.appendChild(element);
+      }
+    }
+    return true;
+  }
+}
+
 // 全局错误捕获
 window.addEventListener('error', function(event) {
   console.error('[Bucket Viewer] Error:', {
@@ -33,6 +63,27 @@ class BucketViewer {
 
     // PUT覆盖功能相关
     this.putDetectionHistory = [];
+
+    // 分页相关属性
+    this.hasMorePages = false;
+    this.maxKeys = '1000';
+    this.totalLoadedPages = 1;
+    this.isLoadingMore = false;
+    this.lastNextMarker = null;
+
+    // 浏览器检测和兼容性配置
+    this.isFirefox = navigator.userAgent.toLowerCase().includes('firefox');
+    this.isChrome = navigator.userAgent.toLowerCase().includes('chrome') && !this.isFirefox;
+
+    // Firefox专用的图片预览相关属性
+    this.currentImageWrapper = null;
+    this.currentBlobUrl = null;
+
+    console.log('[Bucket Viewer] Browser detection:', {
+      isFirefox: this.isFirefox,
+      isChrome: this.isChrome,
+      userAgent: navigator.userAgent
+    });
 
     this.init();
   }
@@ -181,11 +232,8 @@ class BucketViewer {
     this.bindButton('sortBy', () => this.applySorting(), 'change');
     this.bindButton('sortOrderBtn', () => this.toggleSortOrder());
 
-    // 分页
-    this.bindButton('firstPageBtn', () => this.goToPage(1));
-    this.bindButton('prevPageBtn', () => this.goToPage(this.currentPage - 1));
-    this.bindButton('nextPageBtn', () => this.goToPage(this.currentPage + 1));
-    this.bindButton('lastPageBtn', () => this.goToPage(this.totalPages));
+    // 分页 - 使用新的分页系统
+    this.bindPaginationEvents();
 
     // PUT覆盖功能事件绑定
     this.bindPutOverrideEvents();
@@ -246,7 +294,16 @@ class BucketViewer {
         this.files = result.files || [];
         this.filteredFiles = [...this.files];
 
+        // 保存分页相关信息
+        this.hasMorePages = result.hasMorePages || false;
+        this.maxKeys = result.maxKeys || '1000';
+        this.totalLoadedPages = 1; // 第一页总是已加载
+        this.lastNextMarker = null; // 初始化nextMarker
+
         console.log('[Viewer] Final files count:', this.files.length);
+        console.log('[Viewer] Has more pages:', this.hasMorePages);
+        console.log('[Viewer] Max keys:', this.maxKeys);
+        console.log('[Viewer] Total loaded pages:', this.totalLoadedPages);
         this.updateBucketInfo(result.bucket);
         this.hideError();
 
@@ -259,6 +316,21 @@ class BucketViewer {
           // 有文件时，应用默认的过滤和排序，然后渲染
           this.applyFilters();
           this.applySorting();
+        }
+
+        // 默认显示"加载全部文件"按钮（不管文件数量多少）
+        console.log('[Viewer] Always showing load all button for better user experience');
+        console.log('[Viewer] Files loaded:', this.files.length);
+        console.log('[Viewer] Max keys:', this.maxKeys);
+        this.showLoadAllButton();
+
+        // 显示分页控件
+        if (this.hasMorePages) {
+          console.log('[Viewer] Has more pages, showing pagination controls');
+          this.showPaginationControls();
+        } else {
+          console.log('[Viewer] No more pages, hiding pagination controls');
+          this.hidePaginationControls();
         }
       } else {
         console.error('[Viewer] Load failed:', result);
@@ -284,7 +356,18 @@ class BucketViewer {
   updateBucketInfo(bucket) {
     if (bucket) {
       document.getElementById('bucketUrl').textContent = bucket.url || 'Unknown';
-      document.getElementById('fileCount').textContent = `${this.files.length} 个文件`;
+
+      const MAX_FILES = 10000;
+      let fileCountText = `${this.files.length} 个文件`;
+
+      // 如果文件数量达到限制，显示警告信息
+      if (this.files.length >= MAX_FILES) {
+        fileCountText += ` <span class="file-limit-warning">⚠️ 已达到最大限制</span>`;
+      } else if (this.files.length >= MAX_FILES * 0.8) {
+        fileCountText += ` <span class="file-limit-notice">⚠️ 接近最大限制</span>`;
+      }
+
+      document.getElementById('fileCount').innerHTML = fileCountText;
     }
   }
 
@@ -307,6 +390,587 @@ class BucketViewer {
 
     // 隐藏分页
     document.getElementById('pagination').classList.add('hidden');
+  }
+
+  // 调试函数：手动检查分页状态
+  debugPagination() {
+    console.log('[Viewer Debug] === PAGINATION DEBUG START ===');
+    console.log('[Viewer Debug] Current pagination state:');
+    console.log('- bucketId:', this.bucketId);
+    console.log('- hasMorePages:', this.hasMorePages);
+    console.log('- files.length:', this.files.length);
+    console.log('- maxKeys:', this.maxKeys);
+    console.log('- bucketUrl:', this.bucketUrl);
+    console.log('- load all button exists:', !!document.getElementById('loadAllBtn'));
+    console.log('- bucket actions exists:', !!document.querySelector('.bucket-actions'));
+    console.log('- bucket info visible:', !document.getElementById('bucketInfo').classList.contains('hidden'));
+    console.log('- refreshBtn exists:', !!document.getElementById('refreshBtn'));
+    console.log('- exportBtn exists:', !!document.getElementById('exportBtn'));
+
+    // 检查DOM元素
+    const bucketActions = document.querySelector('.bucket-actions');
+    if (bucketActions) {
+      console.log('[Viewer Debug] Bucket actions children:', bucketActions.children.length);
+      for (let i = 0; i < bucketActions.children.length; i++) {
+        console.log(`[Viewer Debug] Child ${i}:`, bucketActions.children[i]);
+      }
+    }
+
+    // 如果有存储桶ID，尝试重新获取数据来检查
+    if (this.bucketId) {
+      console.log('[Viewer Debug] Fetching fresh data from backend...');
+      this.sendMessage({
+        type: 'getBucketData',
+        bucketId: this.bucketId
+      }).then(result => {
+        console.log('[Viewer Debug] Fresh data check result:', result);
+        if (result.success) {
+          console.log('[Viewer Debug] Backend data:');
+          console.log('- Backend hasMorePages:', result.hasMorePages);
+          console.log('- Backend fileCount:', result.fileCount);
+          console.log('- Backend maxKeys:', result.maxKeys);
+
+          // 检查是否应该显示按钮
+          const shouldShow = result.hasMorePages;
+          console.log('[Viewer Debug] Should show button:', shouldShow);
+
+          if (shouldShow) {
+            console.log('[Viewer Debug] Button should be showing - calling showLoadAllButton()');
+            this.showLoadAllButton();
+          }
+        } else {
+          console.error('[Viewer Debug] Failed to get fresh data:', result);
+        }
+      });
+    } else {
+      console.log('[Viewer Debug] No bucketId available');
+    }
+
+    console.log('[Viewer Debug] === PAGINATION DEBUG END ===');
+  }
+
+  // 显示分页控件
+  showPaginationControls() {
+    console.log('[Viewer] Showing pagination controls');
+    const paginationControls = document.getElementById('paginationControls');
+    if (paginationControls) {
+      paginationControls.classList.remove('hidden');
+      this.updatePaginationInfo();
+      this.updatePaginationButtons();
+    }
+  }
+
+  // 隐藏分页控件
+  hidePaginationControls() {
+    console.log('[Viewer] Hiding pagination controls');
+    const paginationControls = document.getElementById('paginationControls');
+    if (paginationControls) {
+      paginationControls.classList.add('hidden');
+    }
+  }
+
+  // 更新分页信息显示
+  updatePaginationInfo() {
+    const statusEl = document.getElementById('paginationStatus');
+    const totalEl = document.getElementById('paginationTotal');
+    const totalPagesEl = document.getElementById('totalPages');
+    const pageInputEl = document.getElementById('pageJumpInput');
+
+    if (statusEl && totalEl && totalPagesEl && pageInputEl) {
+      const start = (this.currentPage - 1) * this.pageSize + 1;
+      const end = Math.min(this.currentPage * this.pageSize, this.files.length);
+
+      statusEl.textContent = `显示第 ${start}-${end} 条`;
+      totalEl.textContent = `共 ${this.files.length} 条`;
+      totalPagesEl.textContent = this.totalLoadedPages;
+      pageInputEl.value = this.currentPage;
+      pageInputEl.max = this.totalLoadedPages;
+    }
+  }
+
+  // 更新分页按钮状态
+  updatePaginationButtons() {
+    const firstBtn = document.getElementById('firstPageBtn');
+    const prevBtn = document.getElementById('prevPageBtn');
+    const nextBtn = document.getElementById('nextPageBtn');
+    const lastBtn = document.getElementById('lastPageBtn');
+
+    if (firstBtn) firstBtn.disabled = this.currentPage <= 1;
+    if (prevBtn) prevBtn.disabled = this.currentPage <= 1;
+    if (nextBtn) nextBtn.disabled = !this.hasMorePages;
+    if (lastBtn) lastBtn.disabled = !this.hasMorePages;
+  }
+
+  // 加载下一页
+  async loadNextPage() {
+    if (!this.hasMorePages || this.isLoadingMore) {
+      console.log('[Viewer] No more pages to load or already loading');
+      return;
+    }
+
+    console.log('[Viewer] Loading next page...');
+    this.isLoadingMore = true;
+    this.showLoadingState('正在加载下一页...');
+
+    try {
+      const result = await this.sendMessage({
+        type: 'loadNextPage',
+        bucketId: this.bucketId,
+        bucketUrl: this.bucketUrl,
+        maxKeys: this.maxKeys,
+        nextMarker: this.lastNextMarker
+      });
+
+      if (result.success) {
+        console.log('[Viewer] Next page loaded successfully');
+
+        // 重新获取数据
+        const refreshResult = await this.sendMessage({
+          type: 'getBucketData',
+          bucketId: this.bucketId
+        });
+
+        if (refreshResult.success) {
+          this.files = refreshResult.files || [];
+          this.filteredFiles = [...this.files];
+          this.hasMorePages = refreshResult.hasMorePages || false;
+          this.totalLoadedPages++;
+
+          // 更新UI
+          this.updateBucketInfo(refreshResult.bucket);
+          this.applyFilters();
+          this.applySorting();
+          this.updatePaginationInfo();
+          this.updatePaginationButtons();
+
+          // 如果没有更多页面了，显示完成消息
+          if (!this.hasMorePages) {
+            this.showMessage(`已加载全部 ${this.files.length} 个文件`, 'success');
+            setTimeout(() => {
+              this.hidePaginationControls();
+            }, 2000);
+          }
+        }
+      } else {
+        throw new Error(result.error || '加载下一页失败');
+      }
+    } catch (error) {
+      console.error('[Viewer] Error loading next page:', error);
+      this.showMessage(`加载下一页失败: ${error.message}`, 'error');
+    } finally {
+      this.isLoadingMore = false;
+      this.hideLoadingState();
+    }
+  }
+
+  // 加载指定页
+  async loadPage(pageNumber) {
+    if (pageNumber < 1 || pageNumber > this.totalLoadedPages || this.isLoadingMore) {
+      console.log('[Viewer] Invalid page number or already loading');
+      return;
+    }
+
+    console.log(`[Viewer] Loading page ${pageNumber}...`);
+    this.isLoadingMore = true;
+    this.showLoadingState(`正在加载第 ${pageNumber} 页...`);
+
+    try {
+      const result = await this.sendMessage({
+        type: 'loadSpecificPage',
+        bucketId: this.bucketId,
+        bucketUrl: this.bucketUrl,
+        pageNumber: pageNumber,
+        maxKeys: this.maxKeys
+      });
+
+      if (result.success) {
+        console.log(`[Viewer] Page ${pageNumber} loaded successfully`);
+
+        // 重新获取数据
+        const refreshResult = await this.sendMessage({
+          type: 'getBucketData',
+          bucketId: this.bucketId
+        });
+
+        if (refreshResult.success) {
+          this.files = refreshResult.files || [];
+          this.filteredFiles = [...this.files];
+          this.hasMorePages = refreshResult.hasMorePages || false;
+          this.currentPage = pageNumber;
+
+          // 更新UI
+          this.updateBucketInfo(refreshResult.bucket);
+          this.applyFilters();
+          this.applySorting();
+          this.updatePaginationInfo();
+          this.updatePaginationButtons();
+        }
+      } else {
+        throw new Error(result.error || `加载第 ${pageNumber} 页失败`);
+      }
+    } catch (error) {
+      console.error(`[Viewer] Error loading page ${pageNumber}:`, error);
+      this.showMessage(`加载第 ${pageNumber} 页失败: ${error.message}`, 'error');
+    } finally {
+      this.isLoadingMore = false;
+      this.hideLoadingState();
+    }
+  }
+
+  // 批量加载多页
+  async batchLoadPages() {
+    if (this.isLoadingMore) {
+      console.log('[Viewer] Already loading, please wait...');
+      return;
+    }
+
+    const batchSizeSelect = document.getElementById('batchLoadSize');
+    const batchSize = batchSizeSelect ? batchSizeSelect.value : '10';
+
+    if (batchSize === 'all') {
+      // 加载全部页面
+      this.loadAllData();
+      return;
+    }
+
+    const pagesToLoad = parseInt(batchSize);
+    console.log(`[Viewer] Batch loading ${pagesToLoad} pages...`);
+
+    this.isLoadingMore = true;
+    this.showLoadingState(`正在批量加载 ${pagesToLoad} 页...`);
+
+    try {
+      for (let i = 0; i < pagesToLoad && this.hasMorePages; i++) {
+      console.log(`[Viewer] Loading batch page ${i + 1}/${pagesToLoad}...`);
+
+      const result = await this.sendMessage({
+        type: 'loadNextPage',
+        bucketId: this.bucketId,
+        bucketUrl: this.bucketUrl,
+        maxKeys: this.maxKeys,
+        nextMarker: this.lastNextMarker
+      });
+
+      if (!result.success) {
+        throw new Error(result.error || `批量加载第 ${i + 1} 页失败`);
+      }
+
+      // 更新文件数据
+      const refreshResult = await this.sendMessage({
+        type: 'getBucketData',
+        bucketId: this.bucketId
+      });
+
+      if (refreshResult.success) {
+        this.files = refreshResult.files || [];
+        this.filteredFiles = [...this.files];
+        this.hasMorePages = refreshResult.hasMorePages || false;
+        this.totalLoadedPages++;
+        this.lastNextMarker = result.nextMarker;
+      }
+
+      // 更新进度显示
+      this.updateBucketInfo(refreshResult.bucket);
+      this.applyFilters();
+      this.applySorting();
+      this.updatePaginationInfo();
+      this.updatePaginationButtons();
+
+      // 如果已经加载了足够的页面但还有更多，给用户一个选择
+      if (i === pagesToLoad - 1 && this.hasMorePages && pagesToLoad < 50) {
+        const continueLoad = confirm(`已加载 ${pagesToLoad} 页，还有更多页面。是否继续加载？`);
+        if (!continueLoad) break;
+      }
+    }
+
+    this.showMessage(`成功批量加载 ${Math.min(pagesToLoad, this.totalLoadedPages)} 页，总计 ${this.files.length} 个文件`, 'success');
+
+    if (!this.hasMorePages) {
+      setTimeout(() => {
+        this.hidePaginationControls();
+      }, 2000);
+    }
+
+  } catch (error) {
+    console.error('[Viewer] Error batch loading:', error);
+    this.showMessage(`批量加载失败: ${error.message}`, 'error');
+    } finally {
+      this.isLoadingMore = false;
+      this.hideLoadingState();
+    }
+  }
+
+  // 绑定分页控件事件
+  bindPaginationEvents() {
+    // 页面跳转输入框
+    const pageInput = document.getElementById('pageJumpInput');
+    if (pageInput) {
+      pageInput.addEventListener('change', (e) => {
+        const targetPage = parseInt(e.target.value);
+        if (targetPage && targetPage !== this.currentPage) {
+          this.loadPage(targetPage);
+        }
+      });
+
+      pageInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+          const targetPage = parseInt(e.target.value);
+          if (targetPage && targetPage !== this.currentPage) {
+            this.loadPage(targetPage);
+          }
+        }
+      });
+    }
+
+    // 分页按钮
+    this.bindButton('firstPageBtn', () => this.loadPage(1));
+    this.bindButton('prevPageBtn', () => this.loadPage(Math.max(1, this.currentPage - 1)));
+    this.bindButton('nextPageBtn', () => this.loadPage(this.currentPage + 1));
+    this.bindButton('lastPageBtn', () => {
+      if (this.hasMorePages) {
+        // 加载到最后一页
+        let targetPage = this.currentPage;
+        while (this.hasMorePages && targetPage < this.totalLoadedPages + 10) {
+          targetPage++;
+          // 这里简化处理，实际应该递归加载
+        }
+        this.loadPage(targetPage);
+      }
+    });
+
+    // 批量加载按钮
+    this.bindButton('batchLoadBtn', () => this.batchLoadPages());
+  }
+
+  // 显示加载全部数据按钮
+  showLoadAllButton() {
+    console.log('[Viewer] === SHOW LOAD ALL BUTTON DEBUG START ===');
+    console.log('[Viewer] showLoadAllButton called');
+    console.log('[Viewer] Current state:');
+    console.log('- this.files.length:', this.files.length);
+    console.log('- this.maxKeys:', this.maxKeys);
+    console.log('- this.bucketUrl:', this.bucketUrl);
+
+    // 检查是否已经存在加载全部按钮
+    let loadAllBtn = document.getElementById('loadAllBtn');
+    console.log('[Viewer] Existing button found:', !!loadAllBtn);
+
+    if (!loadAllBtn) {
+      console.log('[Viewer] Creating new load all button');
+      // 创建加载全部按钮
+      loadAllBtn = document.createElement('button');
+      loadAllBtn.id = 'loadAllBtn';
+      loadAllBtn.className = 'btn btn-secondary';
+
+      // 根据当前状态调整按钮文本和提示
+      const buttonText = this.hasMorePages ? '加载剩余页面' : '重新加载全部';
+      const buttonHint = this.hasMorePages
+        ? `加载剩余页面（当前显示${this.files.length}个文件）`
+        : `重新加载全部${this.files.length}个文件`;
+
+      loadAllBtn.title = buttonHint;
+      loadAllBtn.innerHTML = `<span class="icon">⬇️</span> ${buttonText}`;
+
+      // 找到bucket-actions容器
+      const bucketActions = document.querySelector('.bucket-actions');
+      console.log('[Viewer] Bucket actions container found:', !!bucketActions);
+
+      if (bucketActions) {
+        console.log('[Viewer] Bucket actions children before insertion:', bucketActions.children.length);
+
+        // 将按钮插入到refreshBtn和exportBtn之间
+        const refreshBtn = document.getElementById('refreshBtn');
+        const exportBtn = document.getElementById('exportBtn');
+        console.log('[Viewer] RefreshBtn found:', !!refreshBtn);
+        console.log('[Viewer] ExportBtn found:', !!exportBtn);
+
+        if (refreshBtn && exportBtn) {
+          console.log('[Viewer] Inserting between refresh and export buttons');
+          bucketActions.insertBefore(loadAllBtn, exportBtn);
+        } else if (refreshBtn) {
+          console.log('[Viewer] Appending after refresh button');
+          bucketActions.appendChild(loadAllBtn);
+        } else {
+          console.log('[Viewer] Appending to bucket actions (no refresh button found)');
+          bucketActions.appendChild(loadAllBtn);
+        }
+
+        console.log('[Viewer] Bucket actions children after insertion:', bucketActions.children.length);
+
+        // 显示bucket-actions区域（确保它可见）
+        const bucketInfo = document.getElementById('bucketInfo');
+        console.log('[Viewer] Bucket info element found:', !!bucketInfo);
+        if (bucketInfo) {
+          console.log('[Viewer] Bucket info classes before:', bucketInfo.className);
+          bucketInfo.classList.remove('hidden');
+          console.log('[Viewer] Bucket info classes after:', bucketInfo.className);
+        }
+
+        console.log('[Viewer] Load all button added to toolbar successfully');
+      } else {
+        console.error('[Viewer] Bucket actions container not found - this is the problem!');
+        console.log('[Viewer] Available elements:');
+        console.log('- document.querySelector(\'.bucket-actions\'):', document.querySelector('.bucket-actions'));
+        console.log('- document.getElementById(\'bucketInfo\'):', document.getElementById('bucketInfo'));
+        console.log('- document.querySelector(\'.bucket-info\'):', document.querySelector('.bucket-info'));
+        return;
+      }
+
+      // 添加样式
+      this.addLoadAllButtonStyles();
+    } else {
+      console.log('[Viewer] Load all button already exists, making it visible');
+    }
+
+    // 确保按钮可见
+    loadAllBtn.style.display = '';
+    loadAllBtn.classList.remove('hidden');
+    console.log('[Viewer] Button visibility set');
+
+    // 绑定点击事件
+    loadAllBtn.onclick = (e) => {
+      e.preventDefault();
+      console.log('[Viewer] Load all button clicked');
+      this.loadAllData();
+    };
+
+    // 验证按钮是否真的在DOM中
+    setTimeout(() => {
+      const verifyBtn = document.getElementById('loadAllBtn');
+      console.log('[Viewer] Button verification after timeout:', !!verifyBtn);
+      if (verifyBtn) {
+        console.log('[Viewer] Button parent:', verifyBtn.parentElement);
+        console.log('[Viewer] Button visible:', verifyBtn.style.display !== 'none' && !verifyBtn.classList.contains('hidden'));
+      }
+    }, 100);
+
+    console.log('[Viewer] === SHOW LOAD ALL BUTTON DEBUG END ===');
+  }
+
+  // 添加加载全部按钮样式
+  addLoadAllButtonStyles() {
+    if (document.querySelector('#loadAllBtnStyles')) return;
+
+    const style = document.createElement('style');
+    style.id = 'loadAllBtnStyles';
+    style.textContent = `
+      #loadAllBtn {
+        position: relative;
+        transition: all 0.2s ease;
+      }
+
+      #loadAllBtn:hover {
+        background-color: #0056b3;
+        transform: translateY(-1px);
+        box-shadow: 0 2px 8px rgba(0, 123, 255, 0.3);
+      }
+
+      #loadAllBtn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none;
+        background-color: #6c757d;
+      }
+
+      #loadAllBtn .icon {
+        display: inline-block;
+        margin-right: 6px;
+        transition: transform 0.3s ease;
+      }
+
+      #loadAllBtn:hover .icon {
+        transform: translateY(2px);
+      }
+
+      #loadAllBtn:disabled .icon {
+        transform: none;
+        animation: spin 1s linear infinite;
+      }
+
+      @keyframes spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+    `;
+
+    safeAddToHead(style, 'bucket-viewer-spinner-style');
+  }
+
+  // 加载全部数据
+  async loadAllData() {
+    const loadAllBtn = document.getElementById('loadAllBtn');
+    if (!loadAllBtn) {
+      console.error('[Viewer] Load all button not found');
+      return;
+    }
+
+    const originalText = loadAllBtn.innerHTML;
+    const originalTitle = loadAllBtn.title;
+
+    try {
+      // 禁用按钮并显示加载状态
+      loadAllBtn.disabled = true;
+      loadAllBtn.innerHTML = '<span class="icon">⏳</span>加载中...';
+      loadAllBtn.title = '正在加载全部数据，请稍候...';
+
+      console.log('[Viewer] Starting to load all bucket data');
+
+      const result = await this.sendMessage({
+        type: 'loadAllPages',
+        bucketId: this.bucketId,
+        bucketUrl: this.bucketUrl,
+        maxKeys: this.maxKeys
+      });
+
+      if (result.success) {
+        console.log('[Viewer] All data loaded successfully, total files:', result.fileCount);
+
+        // 重新获取数据
+        const refreshResult = await this.sendMessage({
+          type: 'getBucketData',
+          bucketId: this.bucketId
+        });
+
+        if (refreshResult.success) {
+          this.files = refreshResult.files || [];
+          this.filteredFiles = [...this.files];
+          this.hasMorePages = false; // 现在没有更多页面了
+
+          // 更新UI
+          this.updateBucketInfo(refreshResult.bucket);
+          this.applyFilters();
+          this.applySorting();
+
+          // 移除加载全部按钮
+          loadAllBtn.remove();
+
+          // 根据文件数量变化提供更详细的反馈
+          const previousFileCount = parseInt(loadAllBtn.title.match(/\d+/)?.[0] || '0');
+          let message = '';
+
+          if (this.files.length > previousFileCount) {
+            message = `成功加载剩余文件，总计 ${this.files.length} 个文件`;
+          } else if (this.files.length === previousFileCount) {
+            message = `当前已显示全部 ${this.files.length} 个文件`;
+          } else {
+            message = `数据已刷新，当前显示 ${this.files.length} 个文件`;
+          }
+
+          this.showMessage(message, 'success');
+        }
+      } else {
+        throw new Error(result.error || '加载全部数据失败');
+      }
+
+    } catch (error) {
+      console.error('[Viewer] Error loading all data:', error);
+      this.showMessage(`加载失败: ${error.message}`, 'error');
+
+      // 恢复按钮状态
+      loadAllBtn.disabled = false;
+      loadAllBtn.innerHTML = originalText;
+      loadAllBtn.title = originalTitle;
+    }
   }
 
   // 隐藏空状态
@@ -513,8 +1177,8 @@ class BucketViewer {
     item.innerHTML = `
       <div class="file-preview">
         ${isImage ?
-          `<img src="${fileUrl}" alt="${fileName}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-           <div class="file-icon" style="display: none;">📄</div>` :
+          `<img src="${fileUrl}" alt="${fileName}" class="file-image-preview">
+           <div class="file-icon fallback-icon" style="display: none;">📄</div>` :
           `<div class="file-icon">${this.getFileIcon(file.file_type)}</div>`
         }
       </div>
@@ -543,6 +1207,19 @@ class BucketViewer {
         }
       </div>
     `;
+
+    // 添加图片错误处理监听器（修复CSP问题）
+    setTimeout(() => {
+      const img = item.querySelector('.file-image-preview');
+      const fallbackIcon = item.querySelector('.fallback-icon');
+
+      if (img && fallbackIcon) {
+        img.addEventListener('error', () => {
+          img.style.display = 'none';
+          fallbackIcon.style.display = 'flex';
+        });
+      }
+    }, 0);
 
     return item;
   }
@@ -629,32 +1306,141 @@ class BucketViewer {
         return;
       }
 
-      // 设置图片源
-      img.src = image.url;
-      img.style.transform = 'scale(1)';
+      // 设置标题和信息
       title.textContent = image.Key || 'Image Preview';
-
       const size = this.formatFileSize(image.Size);
       const modified = this.formatDate(image.LastModified);
       info.innerHTML = `
         <strong>文件名:</strong> ${image.Key}<br>
         <strong>大小:</strong> ${size}<br>
         <strong>类型:</strong> ${image.file_type}<br>
-        <strong>修改时间:</strong> ${modified}
+        <strong>修改时间:</strong> ${modified}<br>
+        <strong>URL:</strong> <span style="word-break: break-all; font-size: 0.9em; color: #666;">${image.url}</span>
       `;
 
+      // 显示模态框
       modal.classList.remove('hidden');
       modal.style.display = 'flex';
       console.log('[Bucket Viewer] Modal opened for image preview');
 
-      // 添加图片加载事件处理
-      img.onload = () => {
-        console.log('[Bucket Viewer] Image loaded successfully');
-      };
-      img.onerror = (e) => {
-        console.error('[Bucket Viewer] Failed to load image:', e);
-        // 可以在这里显示错误信息或占位图
-      };
+      // 根据浏览器类型采用不同的加载策略
+      if (this.isFirefox) {
+        // Firefox特殊处理 - 使用 fetch + blob URL
+        console.log('[Bucket Viewer] Firefox detected, using fetch-based loading');
+
+        // 保存原始img元素引用，但隐藏它
+        img.style.display = 'none';
+
+        // 创建包装容器，插入到img元素之后
+        const wrapper = document.createElement('div');
+        wrapper.style.cssText = `
+          width: 100%;
+          height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: #f8f9fa;
+          border-radius: 8px;
+          overflow: hidden;
+          position: relative;
+        `;
+
+        // 显示加载状态
+        const loadingDiv = document.createElement('div');
+        loadingDiv.style.cssText = `
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          padding: 40px;
+          color: #6b7280;
+          font-size: 16px;
+        `;
+        loadingDiv.innerHTML = `
+          <div style="width: 40px; height: 40px; border: 4px solid #e5e7eb; border-top: 4px solid #3b82f6; border-radius: 50%; animation: firefox-spin 1s linear infinite; margin-bottom: 16px;"></div>
+          <div>正在加载图片...</div>
+          <div style="font-size: 12px; color: #9ca3af; margin-top: 8px;">${image.Key}</div>
+        `;
+        wrapper.appendChild(loadingDiv);
+
+        // 添加旋转动画样式
+        if (!document.getElementById('firefox-loading-style')) {
+          const style = document.createElement('style');
+          style.textContent = `
+            @keyframes firefox-spin {
+              0% { transform: rotate(0deg); }
+              100% { transform: rotate(360deg); }
+            }
+          `;
+          safeAddToHead(style, 'firefox-loading-style');
+        }
+
+        // 将wrapper插入到img元素之后
+        img.parentNode.insertBefore(wrapper, img.nextSibling);
+
+        // 使用 fetch 获取图片并创建 blob URL
+        this.loadImageForFirefox(image.url, image.Key)
+          .then(blobUrl => {
+            // 清除加载状态
+            wrapper.innerHTML = '';
+
+            // 创建图片元素
+            const previewImg = document.createElement('img');
+            previewImg.src = blobUrl;
+            previewImg.style.cssText = `
+              max-width: 100%;
+              max-height: 100%;
+              object-fit: contain;
+              border-radius: 4px;
+              box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            `;
+
+            previewImg.onload = () => {
+              console.log('[Bucket Viewer] Firefox: Image loaded successfully via blob URL');
+            };
+
+            previewImg.onerror = (e) => {
+              console.error('[Bucket Viewer] Firefox: Blob URL image failed:', e);
+              // 回退到原始img元素
+              this.fallbackToOriginalImg(img, image);
+            };
+
+            wrapper.appendChild(previewImg);
+
+            // 存储当前的 blob URL 用于清理
+            this.currentBlobUrl = blobUrl;
+          })
+          .catch(error => {
+            console.error('[Bucket Viewer] Firefox: Fetch failed:', error);
+            // 回退到原始img元素
+            this.fallbackToOriginalImg(img, image);
+          });
+
+        // 存储wrapper引用
+        this.currentImageWrapper = wrapper;
+
+      } else {
+        // Chrome和其他浏览器：正常使用img标签
+        // 确保没有火狐的wrapper残留
+        if (this.currentImageWrapper && this.currentImageWrapper.parentNode) {
+          this.currentImageWrapper.parentNode.removeChild(this.currentImageWrapper);
+          this.currentImageWrapper = null;
+        }
+
+        img.style.display = '';
+        console.log('[Bucket Viewer] Setting image src to:', image.url);
+        img.src = image.url;
+        img.style.transform = 'scale(1)';
+
+        img.onload = () => {
+          console.log('[Bucket Viewer] Image loaded successfully:', image.url);
+        };
+
+        img.onerror = (e) => {
+          console.error('[Bucket Viewer] Failed to load image:', e);
+          info.innerHTML += `<br><div style="color: red; margin-top: 10px;"><strong>加载失败:</strong> 图片无法加载</div>`;
+        };
+      }
     } else {
       console.error('[Bucket Viewer] Invalid image index:', index, 'Total images:', imageFiles.length);
     }
@@ -663,9 +1449,25 @@ class BucketViewer {
   closeImagePreview() {
     console.log('[Bucket Viewer] Closing image preview');
     const modal = document.getElementById('imagePreviewModal');
+    const img = document.getElementById('previewImage');
+
     if (modal) {
       modal.classList.add('hidden');
       modal.style.display = 'none';
+
+      // 清理图片资源
+      if (img) {
+        const currentSrc = img.src;
+        img.src = '';
+        img.onload = null;
+        img.onerror = null;
+
+        // 如果是 blob URL，释放它
+        if (currentSrc && currentSrc.startsWith('blob:')) {
+          URL.revokeObjectURL(currentSrc);
+          console.log('[Bucket Viewer] Revoked blob URL:', currentSrc);
+        }
+      }
     } else {
       console.error('[Bucket Viewer] Modal element not found in closeImagePreview');
     }
@@ -922,14 +1724,8 @@ class BucketViewer {
       return;
     }
 
-    // 检查URL格式
-    if (!this.isBucketUrl(url)) {
-      const confirmResult = confirm('URL格式可能不正确，是否继续解析？\n\n常见格式：\n- http://minio.example.com/bucket/\n- https://bucket.s3.amazonaws.com/');
-      if (!confirmResult) {
-        urlInput.focus();
-        return;
-      }
-    }
+    // 检查URL格式 - 移除弹窗确认，直接进行解析
+    // URL有效性将通过实际的XML响应来验证
 
     // 添加到历史记录
     this.addToHistory(url);
@@ -987,7 +1783,7 @@ class BucketViewer {
         to { transform: translateX(100%); opacity: 0; }
       }
     `;
-    document.head.appendChild(style);
+    safeAddToHead(style, 'bucket-viewer-message-style');
 
     document.body.appendChild(messageDiv);
 
@@ -1268,24 +2064,10 @@ class BucketViewer {
     }, 100);
   }
 
-  // 检查URL是否为存储桶格式
+  // 检查URL是否为存储桶格式（现在支持所有URL）
   isBucketUrl(url) {
-    const bucketPatterns = [
-      /.*s3.*\.amazonaws\.com/,
-      /.*\.s3-.*\.amazonaws\.com/,
-      /.*s3.*\.aliyuncs\.com/,
-      /.*obs.*\.myhuaweicloud\.com/,
-      /.*cos.*\.myqcloud\.com/,
-      /.*\.oss-.*\.aliyuncs\.com/,
-      /.*storage\.googleapis\.com/,
-      // MinIO 服务器支持
-      /.*minio\..*/,
-      // 通用对象存储模式
-      /^[a-z]+:\/\/[a-z0-9.-]+\/[a-z0-9-_]+\/?$/i,
-      /\/[a-z0-9-_]+\/?$/i
-    ];
-
-    return bucketPatterns.some(pattern => pattern.test(url));
+    // 移除URL格式检测，支持所有URL
+    return true;
   }
 
   // 应用URL模板
@@ -1410,6 +2192,8 @@ class BucketViewer {
       this.previewPDF(url, fileName);
     } else if (['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'].includes(fileExtension)) {
       this.previewOfficeDocument(url, fileName);
+    } else if (['txt', 'log', 'md', 'csv', 'json', 'xml', 'html', 'css', 'js', 'ts', 'py', 'java', 'cpp', 'c', 'h', 'sql', 'sh', 'bat', 'ini', 'conf', 'config', 'yaml', 'yml'].includes(fileExtension)) {
+      this.previewTextFile(url, fileName);
     } else {
       this.showMessage('暂不支持此类型文档的预览', 'warning');
     }
@@ -1448,11 +2232,11 @@ class BucketViewer {
             <span class="pdf-browser-url">${url}</span>
           </div>
           <div class="pdf-browser-actions">
-            <button class="btn btn-secondary" onclick="window.open('${url}', '_blank')">
+            <button class="btn btn-secondary pdf-open-new-tab" data-url="${url}">
               <span class="icon">🔗</span>
               新标签页打开
             </button>
-            <button class="btn btn-primary" onclick="window.location.href='${url}'">
+            <button class="btn btn-primary pdf-download" data-url="${url}">
               <span class="icon">⬇️</span>
               下载PDF
             </button>
@@ -1463,8 +2247,7 @@ class BucketViewer {
                   width="100%"
                   height="600px"
                   style="border: 1px solid #e5e7eb; border-radius: 8px;"
-                  onload="console.log('[Bucket Viewer] PDF iframe loaded successfully')"
-                  onerror="console.error('[Bucket Viewer] PDF iframe failed to load')">
+                  class="pdf-iframe">
             <p>您的浏览器不支持PDF预览，请尝试点击上方"新标签页打开"按钮。</p>
           </iframe>
         </div>
@@ -1473,6 +2256,38 @@ class BucketViewer {
         </div>
       </div>
     `, 'large');
+
+    // 绑定PDF按钮事件监听器（修复CSP问题）
+    setTimeout(() => {
+      const openBtn = document.querySelector('.pdf-open-new-tab');
+      const downloadBtn = document.querySelector('.pdf-download');
+      const iframe = document.querySelector('.pdf-iframe');
+
+      if (openBtn) {
+        const url = openBtn.dataset.url;
+        openBtn.addEventListener('click', () => {
+          window.open(url, '_blank');
+        });
+      }
+
+      if (downloadBtn) {
+        const url = downloadBtn.dataset.url;
+        downloadBtn.addEventListener('click', () => {
+          window.location.href = url;
+        });
+      }
+
+      // 绑定iframe事件监听器
+      if (iframe) {
+        iframe.addEventListener('load', () => {
+          console.log('[Bucket Viewer] PDF iframe loaded successfully');
+        });
+
+        iframe.addEventListener('error', () => {
+          console.error('[Bucket Viewer] PDF iframe failed to load');
+        });
+      }
+    }, 100);
   }
 
   // Office文档预览
@@ -1504,12 +2319,23 @@ class BucketViewer {
             • 文档格式不受支持<br>
             • 网络连接问题
           </div>
-          <button class="btn btn-primary" onclick="window.open('${viewerUrl}', '_blank')">
+          <button class="btn btn-primary office-open-new-window" data-url="${viewerUrl}">
             在新窗口中打开
           </button>
         </div>
       </div>
     `, 'large');
+
+    // 绑定Office文档按钮事件监听器（修复CSP问题）
+    setTimeout(() => {
+      const openBtn = document.querySelector('.office-open-new-window');
+      if (openBtn) {
+        const url = openBtn.dataset.url;
+        openBtn.addEventListener('click', () => {
+          window.open(url, '_blank');
+        });
+      }
+    }, 100);
 
     // 设置多种检测机制来隐藏加载动画
     setTimeout(() => {
@@ -1561,6 +2387,343 @@ class BucketViewer {
       console.log('[Bucket Viewer] Hiding Office loading animation');
       loading.style.display = 'none';
     }
+  }
+
+  // 文本文件预览
+  async previewTextFile(url, fileName) {
+    console.log('[Bucket Viewer] previewTextFile called:', { url, fileName });
+
+    try {
+      // 显示加载状态
+      this.showMessage('正在加载文本文件...', 'info');
+
+      // 获取文件内容
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const text = await response.text();
+
+      // 检查文件编码和内容
+      if (text.length === 0) {
+        this.showMessage('文件为空', 'warning');
+        return;
+      }
+
+      // 检查文件大小（限制10MB）
+      const contentLength = response.headers.get('content-length');
+      const fileSize = contentLength ? parseInt(contentLength) : text.length * 2; // 估算UTF-16大小
+
+      if (fileSize > 10 * 1024 * 1024) { // 10MB
+        this.showMessage('文本文件过大，超过10MB限制，请下载后查看', 'warning');
+        return;
+      }
+
+      // 显示文本内容
+      this.showTextPreview(fileName, text, fileSize);
+
+    } catch (error) {
+      console.error('[Bucket Viewer] Error loading text file:', error);
+      this.showMessage(`加载文本文件失败: ${error.message}`, 'error');
+    }
+  }
+
+  // 显示文本预览
+  showTextPreview(fileName, content, fileSize) {
+    const fileExtension = this.getFileExtension(fileName);
+    const detectedEncoding = this.detectEncoding(content);
+
+    // 格式化文件大小
+    const formattedSize = this.formatFileSize(fileSize);
+
+    // 确定是否使用代码高亮
+    const shouldHighlight = ['js', 'ts', 'py', 'java', 'cpp', 'c', 'h', 'sql', 'sh', 'bat', 'html', 'css', 'json', 'xml', 'yaml', 'yml', 'md'].includes(fileExtension);
+
+    // 处理内容显示
+    let displayContent = content;
+    let isLargeFile = content.length > 100000; // 100KB以上认为是大文件
+
+    if (isLargeFile) {
+      // 大文件只显示前50KB
+      displayContent = content.substring(0, 50000);
+      if (content.length > 50000) {
+        displayContent += '\n\n... (文件过大，只显示前50KB，完整内容请下载查看) ...';
+      }
+    }
+
+    // 基本的语法高亮（简单实现）
+    if (shouldHighlight) {
+      displayContent = this.applySyntaxHighlighting(displayContent, fileExtension);
+    } else {
+      // 转义HTML字符
+      displayContent = this.escapeHtml(displayContent);
+    }
+
+    // 创建模态框内容
+    const modalContent = `
+      <div class="text-preview-container">
+        <div class="text-preview-header">
+          <div class="text-preview-info">
+            <h3>${this.escapeHtml(fileName)}</h3>
+            <div class="text-preview-meta">
+              <span class="text-size">大小: ${formattedSize}</span>
+              <span class="text-encoding">编码: ${detectedEncoding}</span>
+              <span class="text-lines">行数: ${content.split('\n').length}</span>
+              ${isLargeFile ? '<span class="text-truncated">已截断显示</span>' : ''}
+            </div>
+          </div>
+          <div class="text-preview-actions">
+            <button class="btn btn-secondary copy-text-btn" id="copyTextBtn">
+              <span>📋</span> 复制内容
+            </button>
+            <button class="btn btn-primary download-text-btn" id="downloadTextBtn">
+              <span>⬇️</span> 下载
+            </button>
+          </div>
+        </div>
+        <div class="text-preview-content ${shouldHighlight ? 'code-highlight' : ''}">
+          <pre><code>${displayContent}</code></pre>
+        </div>
+      </div>
+    `;
+
+    // 保存当前预览URL供下载使用
+    window.currentPreviewUrl = arguments[2] || '';
+
+    // 显示模态框
+    this.showModal(`文本文件预览 - ${fileName}`, modalContent, 'large');
+
+    // 添加样式
+    this.addTextPreviewStyles();
+
+    // 绑定事件监听器（修复CSP问题）
+    setTimeout(() => {
+      const copyBtn = document.getElementById('copyTextBtn');
+      const downloadBtn = document.getElementById('downloadTextBtn');
+
+      if (copyBtn) {
+        copyBtn.addEventListener('click', () => {
+          this.copyTextContent();
+        });
+      }
+
+      if (downloadBtn) {
+        downloadBtn.addEventListener('click', () => {
+          this.downloadFile(window.currentPreviewUrl);
+        });
+      }
+    }, 100);
+
+    // 如果是代码文件，添加行号
+    if (shouldHighlight) {
+      this.addLineNumbers();
+    }
+  }
+
+  // 检测文本编码
+  detectEncoding(content) {
+    // 简单的编码检测
+    if (content.charCodeAt(0) === 0xFEFF) return 'UTF-16 BE';
+    if (content.charCodeAt(0) === 0xFFFE) return 'UTF-16 LE';
+    if (content.includes('�')) return 'UTF-8 (可能包含错误字符)';
+    return 'UTF-8';
+  }
+
+  // 应用基本语法高亮
+  applySyntaxHighlighting(content, extension) {
+    // 转义HTML字符
+    let highlighted = this.escapeHtml(content);
+
+    // 基本的语法高亮规则
+    const rules = {
+      js: [
+        { pattern: /\b(function|const|let|var|if|else|for|while|return|class|extends|import|export|default|try|catch|finally|throw|new|this|super)\b/g, className: 'keyword' },
+        { pattern: /\/\/.*$/gm, className: 'comment' },
+        { pattern: /\/\*[\s\S]*?\*\//g, className: 'comment' },
+        { pattern: /'([^'\\]|\\.)*'|"([^"\\]|\\.)*"/g, className: 'string' },
+        { pattern: /\b\d+\b/g, className: 'number' }
+      ],
+      py: [
+        { pattern: /\b(def|class|if|elif|else|for|while|return|import|from|as|try|except|finally|raise|with|lambda|yield|async|await)\b/g, className: 'keyword' },
+        { pattern: /#.*$/gm, className: 'comment' },
+        { pattern: /'([^'\\]|\\.)*'|"([^"\\]|\\.)*"|'''[\s\S]*?'''|"""[\s\S]*?"""/g, className: 'string' },
+        { pattern: /\b\d+\b/g, className: 'number' }
+      ],
+      html: [
+        { pattern: /<!--[\s\S]*?-->/g, className: 'comment' },
+        { pattern: /<[^>]+>/g, className: 'tag' },
+        { pattern: /"([^"\\]|\\.)*"/g, className: 'attribute' }
+      ],
+      css: [
+        { pattern: /\/\*[\s\S]*?\*\//g, className: 'comment' },
+        { pattern: /\#[a-fA-F0-9]{3,6}\b/g, className: 'color' },
+        { pattern: /\.[a-zA-Z-]+/g, className: 'class' },
+        { pattern: /#[a-zA-Z-]+/g, className: 'id' }
+      ]
+    };
+
+    const langRules = rules[extension];
+    if (langRules) {
+      langRules.forEach(rule => {
+        highlighted = highlighted.replace(rule.pattern, (match) => {
+          return `<span class="syntax-${rule.className}">${match}</span>`;
+        });
+      });
+    }
+
+    return highlighted;
+  }
+
+  // HTML转义
+  escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  // 复制文本内容
+  copyTextContent() {
+    const content = document.querySelector('.text-preview-content pre code');
+    if (content) {
+      navigator.clipboard.writeText(content.textContent).then(() => {
+        this.showMessage('内容已复制到剪贴板', 'success');
+      }).catch(err => {
+        console.error('[Bucket Viewer] Copy failed:', err);
+        this.showMessage('复制失败', 'error');
+      });
+    }
+  }
+
+  // 添加行号
+  addLineNumbers() {
+    const pre = document.querySelector('.text-preview-content pre');
+    if (pre) {
+      const lines = pre.textContent.split('\n');
+      const lineNumbers = lines.map((_, i) => i + 1).join('\n');
+
+      pre.style.display = 'flex';
+      pre.innerHTML = `
+        <div class="line-numbers">${lineNumbers}</div>
+        <code class="code-content">${pre.querySelector('code').outerHTML}</code>
+      `;
+    }
+  }
+
+  // 添加文本预览样式
+  addTextPreviewStyles() {
+    if (document.querySelector('#textPreviewStyles')) return;
+
+    const style = document.createElement('style');
+    style.id = 'textPreviewStyles';
+    style.textContent = `
+      .text-preview-container {
+        display: flex;
+        flex-direction: column;
+        height: 70vh;
+        max-height: 800px;
+      }
+
+      .text-preview-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        padding: 16px;
+        border-bottom: 1px solid #e1e5e9;
+        background: #f8f9fa;
+        gap: 16px;
+      }
+
+      .text-preview-info h3 {
+        margin: 0 0 8px 0;
+        font-size: 16px;
+        color: #333;
+        word-break: break-all;
+      }
+
+      .text-preview-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        font-size: 12px;
+        color: #666;
+      }
+
+      .text-truncated {
+        color: #d93025;
+        font-weight: 500;
+      }
+
+      .text-preview-actions {
+        display: flex;
+        gap: 8px;
+        flex-shrink: 0;
+      }
+
+      .text-preview-content {
+        flex: 1;
+        overflow: auto;
+        padding: 16px;
+        background: #fff;
+      }
+
+      .text-preview-content pre {
+        margin: 0;
+        font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+        font-size: 13px;
+        line-height: 1.4;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        background: transparent;
+        border: none;
+        padding: 0;
+      }
+
+      .text-preview-content code {
+        background: transparent;
+        border: none;
+        padding: 0;
+      }
+
+      .line-numbers {
+        color: #999;
+        background: #f5f5f5;
+        padding: 0 12px;
+        border-right: 1px solid #e1e5e9;
+        user-select: none;
+        text-align: right;
+        margin-right: 16px;
+      }
+
+      .code-content {
+        flex: 1;
+        overflow-x: auto;
+      }
+
+      /* 语法高亮样式 */
+      .syntax-keyword { color: #0066cc; font-weight: bold; }
+      .syntax-string { color: #009900; }
+      .syntax-comment { color: #999999; font-style: italic; }
+      .syntax-number { color: #cc6600; }
+      .syntax-tag { color: #0000ff; }
+      .syntax-attribute { color: #ff6600; }
+      .syntax-class { color: #cc0066; }
+      .syntax-id { color: #0066cc; }
+      .syntax-color { color: #cc0066; background: #f5f5f5; padding: 2px 4px; border-radius: 3px; }
+
+      @media (max-width: 768px) {
+        .text-preview-header {
+          flex-direction: column;
+          align-items: stretch;
+        }
+
+        .text-preview-actions {
+          justify-content: flex-end;
+        }
+      }
+    `;
+
+    safeAddToHead(style, 'bucket-viewer-pdf-style');
   }
 
   // 获取文件扩展名
@@ -2280,6 +3443,148 @@ class BucketViewer {
       `;
     }).join('');
   }
+
+  // ============= Firefox专用图片预览方法 =============
+
+  // Firefox专用图片加载函数 - 使用 fetch 和 blob URL
+  loadImageForFirefox(imageUrl, fileName) {
+    return new Promise((resolve, reject) => {
+      console.log('[Bucket Viewer] Firefox: Loading image via fetch:', imageUrl);
+
+      fetch(imageUrl, {
+        method: 'GET',
+        mode: 'cors',
+        cache: 'force-cache'
+      })
+      .then(response => {
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        return response.blob();
+      })
+      .then(blob => {
+        const blobUrl = URL.createObjectURL(blob);
+        console.log('[Bucket Viewer] Firefox: Created blob URL:', blobUrl);
+        resolve(blobUrl);
+      })
+      .catch(error => {
+        console.error('[Bucket Viewer] Firefox: Fetch failed:', error);
+        reject(error);
+      });
+    });
+  }
+
+  // 回退到原始img元素的函数
+  fallbackToOriginalImg(img, image) {
+    console.log('[Bucket Viewer] Firefox: Falling back to original img element');
+
+    // 移除火狐专用的wrapper
+    if (this.currentImageWrapper && this.currentImageWrapper.parentNode) {
+      this.currentImageWrapper.parentNode.removeChild(this.currentImageWrapper);
+      this.currentImageWrapper = null;
+    }
+
+    // 显示原始img元素并设置src
+    img.style.display = '';
+    img.src = image.url;
+    img.style.transform = 'scale(1)';
+
+    img.onload = () => {
+      console.log('[Bucket Viewer] Firefox: Original img loaded successfully');
+    };
+
+    img.onerror = (e) => {
+      console.error('[Bucket Viewer] Firefox: Original img also failed:', e);
+      // 最后的回退 - 显示简单提示
+      this.showSimpleFallback(img, image);
+    };
+  }
+
+  // 显示简单回退内容
+  showSimpleFallback(img, image) {
+    console.log('[Bucket Viewer] Firefox: Showing simple fallback');
+
+    // 创建回退div
+    const fallbackDiv = document.createElement('div');
+    fallbackDiv.style.cssText = `
+      width: 100%;
+      height: 400px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: #f8f9fa;
+      border: 2px dashed #dee2e6;
+      border-radius: 8px;
+      padding: 20px;
+      text-align: center;
+    `;
+
+    fallbackDiv.innerHTML = `
+      <div style="font-size: 48px; margin-bottom: 16px;">🖼️</div>
+      <div style="font-size: 16px; font-weight: 600; color: #374151; margin-bottom: 8px;">
+        无法预览此图片
+      </div>
+      <div style="font-size: 14px; color: #6b7280; margin-bottom: 16px;">
+        ${image.Key}
+      </div>
+      <div style="display: flex; gap: 12px;">
+        <button class="firefox-image-open-btn" data-url="${image.url}"
+                style="padding: 8px 16px; background: #3b82f6; color: white; border: none; border-radius: 6px; cursor: pointer;">
+          在新标签页打开
+        </button>
+        <button class="firefox-image-download-btn" data-url="${image.url}"
+                style="padding: 8px 16px; background: #10b981; color: white; border: none; border-radius: 6px; cursor: pointer;">
+          下载图片
+        </button>
+      </div>
+      <div style="font-size: 12px; color: #9ca3af; margin-top: 16px;">
+        Firefox安全策略限制，请使用上方按钮查看图片
+      </div>
+    `;
+
+    // 替换img元素
+    img.parentNode.replaceChild(fallbackDiv, img);
+  }
+
+  // 清理 blob URL 的函数
+  cleanupBlobUrl() {
+    if (this.currentBlobUrl) {
+      URL.revokeObjectURL(this.currentBlobUrl);
+      this.currentBlobUrl = null;
+      console.log('[Bucket Viewer] Firefox: Cleaned up blob URL');
+    }
+  }
+
+  // 重写关闭图片预览方法以包含火狐专用的清理逻辑
+  closeImagePreview() {
+    console.log('[Bucket Viewer] Closing image preview with cleanup');
+
+    const modal = document.getElementById('imagePreviewModal');
+    const img = document.getElementById('previewImage');
+
+    if (modal) {
+      modal.classList.add('hidden');
+      modal.style.display = 'none';
+    }
+
+    // 恢复原始img元素
+    if (img) {
+      img.style.display = '';
+      img.src = '';
+      img.onload = null;
+      img.onerror = null;
+    }
+
+    // 移除火狐专用的wrapper
+    if (this.currentImageWrapper && this.currentImageWrapper.parentNode) {
+      this.currentImageWrapper.parentNode.removeChild(this.currentImageWrapper);
+      this.currentImageWrapper = null;
+    }
+
+    // 执行火狐专用的清理
+    this.cleanupBlobUrl();
+  }
 }
 
 
@@ -2289,9 +3594,110 @@ if (document.readyState === 'loading') {
     console.log('[Bucket Viewer] DOM loaded, initializing viewer');
     const viewer = new BucketViewer();
     window.viewer = viewer;
+    window.bucketViewer = viewer; // 同时设置bucketViewer别名
+
+    // 添加全局调试函数
+    window.debugPagination = function() {
+      if (window.bucketViewer) {
+        window.bucketViewer.debugPagination();
+      } else {
+        console.error('BucketViewer not initialized');
+      }
+    };
+
+    // 添加手动显示按钮的调试函数
+    window.showLoadAllButtonDebug = function() {
+      if (window.bucketViewer) {
+        window.bucketViewer.hasMorePages = true; // 强制设置为true
+        window.bucketViewer.showLoadAllButton();
+        console.log('Force showed load all button');
+      } else {
+        console.error('BucketViewer not initialized');
+      }
+    };
+
+    console.log('Bucket Viewer Debug functions available:');
+    console.log('- debugPagination(): Check current pagination state');
+    console.log('- showLoadAllButtonDebug(): Force show load all button');
   });
 } else {
   console.log('[Bucket Viewer] DOM already loaded, initializing viewer immediately');
   const viewer = new BucketViewer();
   window.viewer = viewer;
+  window.bucketViewer = viewer; // 同时设置bucketViewer别名
+
+  // 添加全局调试函数
+  window.debugPagination = function() {
+    const viewer = window.bucketViewer || window.viewer;
+    if (viewer) {
+      viewer.debugPagination();
+    } else {
+      console.error('BucketViewer not initialized');
+      console.log('Available viewer objects:', {
+        bucketViewer: window.bucketViewer,
+        viewer: window.viewer
+      });
+    }
+  };
+
+  // 添加手动显示按钮的调试函数
+  window.showLoadAllButtonDebug = function() {
+    const viewer = window.bucketViewer || window.viewer;
+    if (viewer) {
+      viewer.hasMorePages = true; // 强制设置为true
+      viewer.showLoadAllButton();
+      console.log('Force showed load all button');
+    } else {
+      console.error('BucketViewer not initialized');
+    }
+  };
+
+  // 添加强制重新检查分页状态的函数
+  window.forceCheckPagination = function() {
+    const viewer = window.bucketViewer || window.viewer;
+    if (viewer) {
+      console.log('Force checking pagination...');
+      // 重新设置标志为true并显示按钮
+      viewer.hasMorePages = true;
+      viewer.showLoadAllButton();
+
+      // 同时触发调试
+      viewer.debugPagination();
+    } else {
+      console.error('BucketViewer not initialized');
+    }
+  };
+
+  // 添加检查当前文件数量的函数
+  window.checkFileCount = function() {
+    console.log('[Debug] checkFileCount called');
+    console.log('[Debug] window.bucketViewer:', window.bucketViewer);
+    console.log('[Debug] window.viewer:', window.viewer);
+
+    const viewer = window.bucketViewer || window.viewer;
+    if (viewer) {
+      console.log('Current file count:', viewer.files.length);
+      console.log('Current maxKeys:', viewer.maxKeys);
+      console.log('Should have more pages:', viewer.files.length >= parseInt(viewer.maxKeys || '1000'));
+
+      if (viewer.files.length >= 1000) {
+        console.log('Files >= 1000, forcing button to show');
+        viewer.hasMorePages = true;
+        viewer.showLoadAllButton();
+      } else {
+        console.log('Files < 1000, no button needed (or forcing anyway for testing)');
+        viewer.hasMorePages = true; // 强制显示用于测试
+        viewer.showLoadAllButton();
+      }
+    } else {
+      console.error('BucketViewer not initialized');
+      console.log('Available window properties:', Object.keys(window).filter(k => k.includes('view')));
+    }
+  };
+
+  console.log('Bucket Viewer Debug functions available:');
+  console.log('- debugPagination(): Check current pagination state');
+  console.log('- showLoadAllButtonDebug(): Force show load all button');
+  console.log('- forceCheckPagination(): Force re-check pagination and show button');
+  console.log('- checkFileCount(): Check file count and show button if >= 1000');
 }
