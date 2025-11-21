@@ -34,7 +34,7 @@
 
 3. 打开浏览器扩展管理页面：
    - **Chrome**: `chrome://extensions/`
-   - **Firefox**: `about:addons`
+   - **Firefox**: `about:addons` OR `about:debugging#/runtime/this-firefox`
 
 4. 启用"开发者模式" > 点击"加载已解压的扩展程序"
 

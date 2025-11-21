@@ -126,7 +126,7 @@
                   上传覆盖
                 </button>
               </div>
-              <div class="file-info" id="selectedFileInfo" style="display: none;">
+              <div class="file-info hidden" id="selectedFileInfo">
                 <span class="file-name" id="selectedFileName"></span>
                 <span class="file-size" id="selectedFileSize"></span>
               </div>
@@ -350,7 +350,7 @@
   <!-- Image Preview Modal -->
   <div id="imagePreviewModal" class="modal hidden">
     <div class="modal-backdrop" id="modalBackdrop"></div>
-    <div class="modal-content">
+    <div class="modal-content modal-large">
       <div class="modal-header">
         <h3 id="previewTitle">图片预览</h3>
         <button class="modal-close" id="modalClose">
@@ -404,49 +404,6 @@
   </div>
 
   <script src="viewer.js"></script>
-
-<!-- Debug Script -->
-<script>
-  // 等待页面完全加载后添加调试函数
-  setTimeout(() => {
-    console.log('[Debug] Adding simple debug functions...');
-
-    // 简单的调试函数
-    window.debugCheck = function() {
-      console.log('=== SIMPLE DEBUG ===');
-      console.log('window.viewer:', !!window.viewer);
-      console.log('window.bucketViewer:', !!window.bucketViewer);
-
-      const viewer = window.viewer || window.bucketViewer;
-      if (viewer) {
-        console.log('Files loaded:', viewer.files.length);
-        console.log('Has more pages:', viewer.hasMorePages);
-        console.log('Max keys:', viewer.maxKeys);
-
-        // 显示按钮（现在默认总是显示）
-        console.log('Showing load all button (always visible now)...');
-        viewer.showLoadAllButton();
-      } else {
-        console.log('Viewer not found, trying to access BucketViewer class...');
-        if (typeof BucketViewer !== 'undefined') {
-          console.log('BucketViewer class found, viewer may be initializing...');
-        }
-      }
-    };
-
-    // 强制显示按钮
-    window.forceShowButton = function() {
-      console.log('Showing load all button (always visible)...');
-      const viewer = window.viewer || window.bucketViewer;
-      if (viewer) {
-        viewer.showLoadAllButton();
-        console.log('Button should now be visible');
-      }
-    };
-
-    console.log('Simple debug functions loaded. Try: debugCheck() or forceShowButton()');
-  }, 500);
-</script>
 
 </body>
 </html>

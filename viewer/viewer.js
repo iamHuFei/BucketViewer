@@ -129,7 +129,7 @@ class BucketViewer {
 
       // 强制确保URL输入框可见
       setTimeout(() => {
-        const urlSection = document.getElementById('urlInputSection');
+        const urlSection = document.querySelector('.url-section');
         if (urlSection) {
           console.log('[Bucket Viewer] Force showing URL input section');
           urlSection.classList.remove('hidden');
@@ -187,9 +187,9 @@ class BucketViewer {
     }
 
   
-    // 折叠式组件事件
-    this.bindButton('templatesToggle', () => this.toggleSection('templatesToggle', 'templatesContent'));
-    this.bindButton('historyToggle', () => this.toggleSection('historyToggle', 'historyContent'));
+    // 折叠式组件事件 - 这些元素在当前设计中已移除
+    // this.bindButton('templatesToggle', () => this.toggleSection('templatesToggle', 'templatesContent'));
+    // this.bindButton('historyToggle', () => this.toggleSection('historyToggle', 'historyContent'));
 
     // 快捷模板事件（使用事件委托处理动态生成的模板）
     document.addEventListener('click', (e) => {
@@ -1336,6 +1336,7 @@ class BucketViewer {
         wrapper.style.cssText = `
           width: 100%;
           height: 100%;
+          min-height: 600px;
           display: flex;
           align-items: center;
           justify-content: center;
@@ -1438,7 +1439,7 @@ class BucketViewer {
 
         img.onerror = (e) => {
           console.error('[Bucket Viewer] Failed to load image:', e);
-          info.innerHTML += `<br><div style="color: red; margin-top: 10px;"><strong>加载失败:</strong> 图片无法加载</div>`;
+          info.innerHTML += `<br><div class="image-load-error"><strong>加载失败:</strong> 图片无法加载</div>`;
         };
       }
     } else {
@@ -2005,7 +2006,7 @@ class BucketViewer {
   showUrlInputSection(show) {
     console.log('[Bucket Viewer] showUrlInputSection() - show:', show);
 
-    const urlSection = document.getElementById('urlInputSection');
+    const urlSection = document.querySelector('.url-section');
     const bucketInfo = document.getElementById('bucketInfo');
     const refreshBtn = document.getElementById('refreshBtn');
     const exportBtn = document.getElementById('exportBtn');
